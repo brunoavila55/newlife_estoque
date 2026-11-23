@@ -262,6 +262,7 @@ test('revisa o OCR com foto e confirma a correção feita pelo administrador', a
   await page.getByLabel('Login').fill('admin')
   await page.getByLabel('Senha').fill('senha-de-teste-local')
   await page.getByRole('button', { name: 'Entrar', exact: true }).click()
+  await page.getByRole('button', { name: 'Revisão de etiquetas', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Revisão de etiquetas' })).toBeVisible()
   await page.getByRole('button', { name: 'Abrir captura' }).click()
   await expect(page.getByRole('img', { name: 'Foto da etiqueta enviada pelo técnico' })).toBeVisible()

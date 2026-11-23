@@ -299,6 +299,31 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/admin/users:
+    get:
+      operationId: listUsers
+      summary: Listar contas cadastradas
+      description: Requer papel de administrador. Inclui contas ativas e desativadas.
+      parameters:
+        - name: after
+          in: query
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Página de contas cadastradas
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+                  next_cursor: { type: [string, 'null'], format: uuid }
+        default: { $ref: '#/components/responses/Error' }
     post:
       operationId: createUser
       summary: Cadastrar técnico ou estoquista
@@ -391,6 +416,23 @@ paths:
                                 properties:
                                   normalized_value: { type: string }
                   next_cursor: { type: [string, 'null'], format: uuid }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users/{id}/inventory:
+    get:
+      operationId: listTechnicianInventory
+      summary: Listar equipamentos sob custódia de um técnico
+      description: Requer papel de administrador. Inclui técnicos desativados.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: after
+          in: query
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200': { $ref: '#/paths/~1api~1v1~1me~1inventory/get/responses/200' }
+        '404': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/captures:
     post:

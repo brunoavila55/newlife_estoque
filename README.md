@@ -11,8 +11,7 @@ Use Rust estável, Node.js 24, Docker Compose e as portas locais 3000, 4173, 543
 3. Execute `cargo run --locked -p stock-api -- bootstrap-admin` e informe login, nome e senha no terminal. O comando aplica a migration e cria a primeira conta administrativa.
 4. Execute `cargo run --locked -p stock-api`. Verifique o processo com `curl -fsS http://127.0.0.1:3000/health`.
 
-5. Cadastre pelo menos um técnico. Faça login administrativo com `POST /api/v1/auth/login` e envie `POST /api/v1/admin/users` com os campos `name`, `login`, `password` e `role: "technician"`, usando o cabeçalho `Authorization: Bearer <token>`.
-6. Em outro terminal, execute os comandos abaixo e abra [o PWA local](http://localhost:4173).
+5. Em outro terminal, execute os comandos abaixo e abra [o PWA local](http://localhost:4173).
 
 ```sh
 cd apps/web
@@ -22,6 +21,10 @@ npm run preview
 ```
 
 O endereço de pré-visualização local é `http://localhost:4173`. O proxy local encaminha `/api` para a API Rust. Use o build de pré-visualização para testar o Service Worker. Em produção, sirva `apps/web/dist` e encaminhe `/api` no mesmo domínio HTTPS.
+
+## Administração de usuários
+
+Entre com a conta administrativa e abra **Usuários**. Em **Criar usuário**, informe nome, login, perfil e senha inicial. É possível cadastrar técnicos e estoquistas. A lista mostra o perfil e o status de cada conta. Use **Ver estoque** na linha de um técnico para consultar os equipamentos identificados que estão sob sua custódia.
 
 ## Captura offline
 
@@ -47,7 +50,7 @@ Entre no mesmo aplicativo com a conta de administrador. Em **Revisão de etiquet
 
 ## Recebimento no depósito piloto
 
-Cadastre um estoquista com `role: "warehouse_clerk"`. Entre com a conta dele no aplicativo e abra uma sessão para o técnico que está entregando os equipamentos. O sistema fixa a lista de equipamentos previstos naquele momento. Uma coleta validada depois da abertura pode ser conferida em outra sessão.
+Cadastre um estoquista em **Usuários**. Entre com a conta dele no aplicativo e abra uma sessão para o técnico que está entregando os equipamentos. O sistema fixa a lista de equipamentos previstos naquele momento. Uma coleta validada depois da abertura pode ser conferida em outra sessão.
 
 Com o cursor em **Código lido**, use um scanner USB ou Bluetooth no modo teclado. Configure o mesmo sufixo no scanner e no painel, **Enter** ou **Tab**. Também é possível digitar e clicar em **Buscar código**. Para conferir dois identificadores, informe o segundo antes de enviar a leitura principal.
 

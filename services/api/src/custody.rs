@@ -432,6 +432,39 @@ pub async fn inventory(
     query: Result<Query<InventoryQuery>, axum::extract::rejection::QueryRejection>,
 ) -> Result<Json<InventoryPage>, ApiError> {
     let (mut tx, technician_id) = authorize(&state.db, &headers, Role::Technician).await?;
+    let page = inventory_page(&mut tx, technician_id, query).await?;
+    tx.commit().await?;
+    Ok(Json(page))
+}
+
+pub async fn admin_inventory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    query: Result<Query<InventoryQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<Json<InventoryPage>, ApiError> {
+    let (mut tx, _) = authorize(&state.db, &headers, Role::Administrator).await?;
+    let technician_id =
+        Uuid::parse_str(&id).map_err(|_| ApiError::invalid("Identificador inválido."))?;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND role = 'technician')",
+    )
+    .bind(technician_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !exists {
+        return Err(ApiError::missing());
+    }
+    let page = inventory_page(&mut tx, technician_id, query).await?;
+    tx.commit().await?;
+    Ok(Json(page))
+}
+
+async fn inventory_page(
+    db: &mut PgConnection,
+    technician_id: Uuid,
+    query: Result<Query<InventoryQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<InventoryPage, ApiError> {
     let Query(query) =
         query.map_err(|_| ApiError::invalid("Parâmetros de paginação inválidos."))?;
     let limit = query.limit.unwrap_or(50);
@@ -444,10 +477,9 @@ pub async fn inventory(
               FROM equipment_identifiers i WHERE i.equipment_id = e.id) AS identifiers
          FROM equipment e WHERE technician_id = $1 AND ($2::uuid IS NULL OR e.id > $2)
          ORDER BY e.id LIMIT $3",
-    ).bind(technician_id).bind(query.after).bind(limit + 1).fetch_all(&mut *tx).await?;
+    ).bind(technician_id).bind(query.after).bind(limit + 1).fetch_all(db).await?;
     let has_more = items.len() > limit as usize;
     items.truncate(limit as usize);
     let next_cursor = items.last().filter(|_| has_more).map(|item| item.id);
-    tx.commit().await?;
-    Ok(Json(InventoryPage { items, next_cursor }))
+    Ok(InventoryPage { items, next_cursor })
 }

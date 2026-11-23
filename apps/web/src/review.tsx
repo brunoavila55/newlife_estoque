@@ -62,7 +62,7 @@ function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : 'Não foi possível conectar ao servidor. Tente novamente.'
 }
 
-export function ReviewDesk({ admin, denied, exit }: { admin: User; denied: () => void; exit: () => Promise<void> }) {
+export function ReviewDesk({ admin, denied }: { admin: User; denied: () => void }) {
   const [filter, setFilter] = useState('pending')
   const [page, setPage] = useState<Page>()
   const [selection, setSelection] = useState<string>()
@@ -96,12 +96,8 @@ export function ReviewDesk({ admin, denied, exit }: { admin: User; denied: () =>
   useEffect(() => { void load() }, [load])
 
   return <>
-    <div className="workspace-head">
-      <div><p className="eyebrow">Área administrativa</p><h1>Revisão de etiquetas</h1><p className="muted">{admin.name}</p></div>
-      <button onClick={() => void exit().catch((error) => setError(fail(error)))}>Sair</button>
-    </div>
     {error && <p className="alert" role="alert">{error}</p>}
-    <section className="card">
+    <section className="card work-list">
       <div className="section-head review-filters">
         <label>Capturas <select value={filter} onChange={(event) => { setPage(undefined); setFilter(event.target.value) }}>
           <option value="pending">Pendentes</option><option value="NEEDS_REVIEW">Em revisão</option>
@@ -247,7 +243,7 @@ function ReviewCapture({ owner, id, fail, changed, close }: {
         {capture.review_issue.reason && <>. {capture.review_issue.reason}</>}
       </p>}
       <div className="review-grid">
-        <section className="review-block">
+        <section className="review-block evidence-panel">
           <h3>Foto original</h3>
           {image && <img className="review-photo" alt="Foto da etiqueta enviada pelo técnico" src={image}
             referrerPolicy="no-referrer" onLoad={() => setImageReady(true)}

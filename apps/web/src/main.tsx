@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { registerSW } from 'virtual:pwa-register'
-import { ApiError, authenticated, clearAccess, enter, leave, lockDevice, resumeSession, type Inventory } from './api'
+import { ApiError, clearAccess, enter, leave, lockDevice, resumeSession } from './api'
 import { db, freeSpace, removeExpiredPhotos, storePhoto, type Capture, type Profile, type User } from './db'
 import { preparePhoto, readBarcode, validBarcode } from './photo'
-import { ReviewDesk } from './review'
+import { AdminDesk } from './users'
+import { InventoryPanel } from './inventory'
 import { ReceivingDesk } from './receiving'
 import { refreshCapture, synchronize } from './sync'
 import './style.css'
@@ -46,7 +47,8 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
   return <section className="login">
     <div className="login-brand">
       <div className="logo-tile"><img src="/icons/new-life-logo.png" alt="New Life" width="560" height="313" /></div>
-      <p>Controle de<br className="desktop-break" /> equipamentos</p>
+      <p>Controle de equipamentos</p>
+      <div className="login-scene" aria-hidden="true" />
     </div>
     <div className="login-panel">
       <h1>{reauthenticate ? 'Entre novamente' : 'Entrar no New Life'}</h1>
@@ -75,45 +77,6 @@ function captureLabel(capture: Capture): string {
     case 'IDENTIFIED': return 'Recebida · identificada'
     default: return 'Recebida'
   }
-}
-
-function InventoryPanel({ owner, denied }: { owner: string; denied: () => void }) {
-  const [page, setPage] = useState<Inventory>()
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  const load = useCallback(async (cursor?: string) => {
-    setLoading(true)
-    setError('')
-    try {
-      const next = await authenticated<Inventory>(owner, '/me/inventory' + (cursor ? '?after=' + cursor : ''))
-      setPage((previous) => cursor && previous ? { ...next, items: [...previous.items, ...next.items] } : next)
-    } catch (failure) {
-      if (failure instanceof ApiError && failure.status === 401) denied()
-      if (!cursor) setPage(undefined)
-      setError(message(failure))
-    } finally {
-      setLoading(false)
-    }
-  }, [denied, owner])
-
-  useEffect(() => { void load() }, [load])
-
-  return <section className="card">
-    <div className="section-head"><h2>Estoque particular</h2><button onClick={() => void load()} disabled={loading}>Atualizar</button></div>
-    {error && <p className="alert" role="alert">{error}</p>}
-    {loading && !page && <p role="status">Consultando seu estoque…</p>}
-    {page?.items.length === 0 && <p className="empty-state">Nenhum equipamento identificado em sua custódia.</p>}
-    {!!page?.items.length && <ul className="items">{page.items.map((item) =>
-      <li key={item.id}>
-        <strong>Em posse · aguardando devolução</strong>
-        <ul>{item.identifiers.map((identifier) =>
-          <li key={identifier.kind + identifier.normalized_value}>{identifier.kind === 'SERIAL' ? 'Serial' : identifier.kind}: {identifier.raw_value}</li>
-        )}</ul>
-      </li>
-    )}</ul>}
-    {page?.next_cursor && <button onClick={() => void load(page.next_cursor!)} disabled={loading}>Carregar mais</button>}
-  </section>
 }
 
 function Desk({ profile, deny, syncing, run, leaveDesk }: {
@@ -187,7 +150,7 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
 
   return <>
     <div className="workspace-head">
-      <div><p className="eyebrow">Área do técnico</p><h1>Recolhimentos</h1><p className="muted">{profile.name}</p></div>
+      <div><h1>{tab === 'captures' ? 'Recolhimentos' : 'Estoque particular'}</h1><p className="workspace-account">{profile.name}</p></div>
       <button disabled={leaving || syncing || saving || pending === undefined}
         onClick={() => pending ? setConfirmLeave(true) : void exit()}>{navigator.onLine ? 'Sair' : 'Bloquear aplicativo'}</button>
     </div>
@@ -203,13 +166,13 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
       <button aria-current={tab === 'inventory' ? 'page' : undefined} onClick={() => setTab('inventory')}>Estoque particular</button>
     </nav>
     {notice && <p role="alert" className="alert">{notice}</p>}
-    {tab === 'inventory' ? <InventoryPanel owner={profile.id} denied={deny} /> : <div className="desk-grid">
+    {tab === 'inventory' ? <InventoryPanel owner={profile.id} denied={deny} /> : <div className="desk-grid field-grid">
       <section className="card capture-card">
         <h2>Fotografar etiqueta</h2>
         <p>Enquadre a etiqueta inteira e confira se o serial e os MACs estão legíveis.</p>
-        <div className="actions">
+        <div className="actions capture-actions">
           <button className="primary" disabled={saving || leaving}
-            onClick={() => camera.current?.click()}>Abrir câmera</button>
+            onClick={() => camera.current?.click()}><span className="camera-mark" aria-hidden="true" />Abrir câmera</button>
           <button disabled={saving || leaving} onClick={() => picker.current?.click()}>Escolher foto</button>
         </div>
         <details>
@@ -226,7 +189,7 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
         {success && <p role="status" className="success">{success}</p>}
         {lowSpace && <p role="alert" className="alert">Pouco espaço disponível. Sincronize antes de liberar espaço.</p>}
       </section>
-      <section className="card">
+      <section className="card work-list">
         <div className="section-head">
           <div><h2>Fila de fotos</h2><p className="muted" aria-live="polite">{pending === undefined ? 'Consultando fila…' : `${pending} pendente(s)`}</p></div>
           <button className="primary" disabled={syncing || leaving} onClick={() => void run(true)}>
@@ -235,7 +198,7 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
         </div>
         {captures?.length === 0 && <p className="empty-state">Nenhuma foto registrada neste dispositivo.</p>}
         {!!captures?.length && <ul className="items">{captures.map((capture) => <li key={capture.id} className="queue-row">
-          <div><strong>{captureLabel(capture)}</strong><br /><time dateTime={capture.capturedAt}>{dateTime.format(new Date(capture.capturedAt))}</time>
+          <div><strong className="status-label" data-state={capture.error ? 'ERROR' : capture.remoteStatus ?? capture.state}>{captureLabel(capture)}</strong><br /><time dateTime={capture.capturedAt}>{dateTime.format(new Date(capture.capturedAt))}</time>
             {capture.lastAttemptAt && capture.state !== 'UPLOADED' && <p className="muted">Última tentativa em {dateTime.format(capture.lastAttemptAt)}</p>}
             {capture.barcode && <p className="muted">Código informado: {capture.barcode.raw_value}</p>}
             {capture.error && <p className="alert">{capture.error}</p>}</div>
@@ -351,7 +314,7 @@ function App() {
       {offlineReady && !standalone && !staff && <p className="notice" role="status">Aplicativo preparado para abrir offline.</p>}
       {error && <p className="alert" role="alert">{error}</p>}
       {dbFailed ? <p className="alert" role="alert">O armazenamento do navegador está indisponível. Abra o aplicativo em uma janela com armazenamento habilitado.</p>
-        : staff?.role === 'administrator' ? <ReviewDesk admin={staff} denied={deny} exit={async () => { await leave(); setStaff(undefined) }} />
+        : staff?.role === 'administrator' ? <AdminDesk admin={staff} denied={deny} exit={async () => { await leave(); setStaff(undefined) }} />
         : staff?.role === 'warehouse_clerk' ? <ReceivingDesk clerk={staff} denied={deny} exit={async () => { await leave(); setStaff(undefined) }} />
         : profile === undefined ? <p role="status">Abrindo aplicativo…</p>
         : needsLogin ? <Login reauthenticate={!!profile} done={(user) => {

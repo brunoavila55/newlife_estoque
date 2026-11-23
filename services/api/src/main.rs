@@ -115,7 +115,14 @@ fn router(state: AppState) -> Router {
             "/api/v1/admin/captures/{id}/reprocess",
             post(review_queue::reprocess),
         )
-        .route("/api/v1/admin/users", post(auth::create_user))
+        .route(
+            "/api/v1/admin/users",
+            get(auth::list_users).post(auth::create_user),
+        )
+        .route(
+            "/api/v1/admin/users/{id}/inventory",
+            get(custody::admin_inventory),
+        )
         .route("/api/v1/admin/users/{id}/disable", post(auth::disable_user))
         .route(
             "/api/v1/admin/users/{id}/reset-password",

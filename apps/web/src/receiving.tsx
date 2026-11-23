@@ -106,13 +106,13 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
 
   return <>
     <div className="workspace-head">
-      <div><p className="eyebrow">Área do estoquista</p><h1>Recebimento de equipamentos</h1><p className="muted">{clerk.name}</p></div>
+      <div><h1>Recebimento de equipamentos</h1><p className="workspace-account">{clerk.name}</p></div>
       <button onClick={() => void exit().catch((failure) => setError(fail(failure)))}>Sair</button>
     </div>
     {error && <p className="alert" role="alert">{error}</p>}
     {selected ? <ReceiptSession key={selected} owner={clerk.id} id={selected} fail={fail}
       back={() => { setSelected(undefined); void loadSessions() }} /> : <div className="desk-grid">
-      <section className="card">
+      <section className="card task-panel">
         <h2>Abrir recebimento</h2>
         <form className="receipt-form" onSubmit={(event) => {
           event.preventDefault()
@@ -132,7 +132,7 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
         {technicians?.next_cursor && <button disabled={findingTechnicians}
           onClick={() => void loadTechnicians(searched, technicians.next_cursor!)}>Mais técnicos</button>}
       </section>
-      <section className="card">
+      <section className="card work-list">
         <div className="section-head"><h2>Minhas sessões</h2>
           <button disabled={findingSessions} onClick={() => void loadSessions()}>Atualizar sessões</button></div>
         {sessions?.items.length === 0 && <p className="empty-state">Nenhuma sessão registrada.</p>}
@@ -276,7 +276,7 @@ function ReceiptSession({ owner, id, fail, back }: {
       {error && <p role="alert" className="alert">{error}</p>}
       {notice && <p role="status" className="success">{notice}</p>}
     </section>
-    {open && <section className="card capture-card">
+    {open && <section className="card scan-panel">
       <h2>Ler etiqueta</h2>
       <form className="receipt-form" onSubmit={(event) => { event.preventDefault(); void scan() }}>
         <label className="review-field">Código lido<input ref={field} name="scan" value={value} onKeyDown={suffix}
@@ -312,31 +312,33 @@ function ReceiptSession({ owner, id, fail, back }: {
         <button className="primary" disabled={busy || !physical} onClick={() => void confirm()}>Confirmar recebimento físico</button>
       </>}
     </section>}
-    <section className="card">
-      <h2>Equipamentos previstos</h2>
-      {detail.items.length === 0 && <p>Nenhum equipamento em custódia na abertura desta sessão.</p>}
-      {!!detail.items.length && <ul className="items">{detail.items.map((entry) => <li key={entry.equipment_id} className="queue-row">
-        <div><strong>{entry.confirmed_at ? 'Confirmado' : entry.matched_scan_id ? 'Localizado · falta confirmar' : 'Faltante'}</strong>
-          <ul className="receipt-identifiers">{entry.identifiers.map((identifier) =>
-            <li key={identifier.kind + identifier.raw_value}>{kinds[identifier.kind]}: {identifier.raw_value}</li>)}</ul></div>
-        {entry.matched_scan_id && <button onClick={() => inspect(entry)} disabled={busy}>
-          {entry.confirmed_at || !open ? 'Ver item' : 'Conferir item'}
-        </button>}
-      </li>)}</ul>}
-      {detail.next_item && <button disabled={busy}
-        onClick={() => void perform(() => load({ type: 'item', id: detail.next_item! }))}>Mais equipamentos</button>}
-    </section>
-    <section className="card">
-      <h2>Histórico de leituras</h2>
-      {detail.scans.length === 0 && <p>Nenhuma leitura registrada.</p>}
-      {!!detail.scans.length && <ul className="items">{detail.scans.map((entry) => <li key={entry.id} className="queue-row">
-        <div><strong>{outcomes[entry.result]}</strong><br />
-          <span>{entry.value}{entry.secondary_value ? ' / ' + entry.secondary_value : ''}</span></div>
-        <time dateTime={entry.created_at}>{dateTime.format(new Date(entry.created_at))}</time>
-      </li>)}</ul>}
-      {detail.next_scan && <button disabled={busy}
-        onClick={() => void perform(() => load({ type: 'scan', id: detail.next_scan! }))}>Mais leituras</button>}
-    </section>
+    <div className="desk-grid receipt-ledger">
+      <section className="card work-list">
+        <h2>Equipamentos previstos</h2>
+        {detail.items.length === 0 && <p>Nenhum equipamento em custódia na abertura desta sessão.</p>}
+        {!!detail.items.length && <ul className="items">{detail.items.map((entry) => <li key={entry.equipment_id} className="queue-row">
+          <div><strong>{entry.confirmed_at ? 'Confirmado' : entry.matched_scan_id ? 'Localizado · falta confirmar' : 'Faltante'}</strong>
+            <ul className="receipt-identifiers">{entry.identifiers.map((identifier) =>
+              <li key={identifier.kind + identifier.raw_value}>{kinds[identifier.kind]}: {identifier.raw_value}</li>)}</ul></div>
+          {entry.matched_scan_id && <button onClick={() => inspect(entry)} disabled={busy}>
+            {entry.confirmed_at || !open ? 'Ver item' : 'Conferir item'}
+          </button>}
+        </li>)}</ul>}
+        {detail.next_item && <button disabled={busy}
+          onClick={() => void perform(() => load({ type: 'item', id: detail.next_item! }))}>Mais equipamentos</button>}
+      </section>
+      <section className="card work-list">
+        <h2>Histórico de leituras</h2>
+        {detail.scans.length === 0 && <p>Nenhuma leitura registrada.</p>}
+        {!!detail.scans.length && <ul className="items">{detail.scans.map((entry) => <li key={entry.id} className="queue-row">
+          <div><strong>{outcomes[entry.result]}</strong><br />
+            <span>{entry.value}{entry.secondary_value ? ' / ' + entry.secondary_value : ''}</span></div>
+          <time dateTime={entry.created_at}>{dateTime.format(new Date(entry.created_at))}</time>
+        </li>)}</ul>}
+        {detail.next_scan && <button disabled={busy}
+          onClick={() => void perform(() => load({ type: 'scan', id: detail.next_scan! }))}>Mais leituras</button>}
+      </section>
+    </div>
     {open && <section className="card">
       <h2>Encerrar recebimento</h2>
       {closing ? <form className="receipt-close" onSubmit={(event) => {

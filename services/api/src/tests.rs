@@ -207,6 +207,39 @@ async fn session_rotation_reset_disable_and_role_checks(db: PgPool) {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
+    let users = "/api/v1/admin/users";
+    let (status, first_page) = call(
+        &app,
+        "GET",
+        &format!("{users}?limit=1"),
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let first = &first_page["items"][0];
+    assert!(first.get("password_hash").is_none());
+    let cursor = first_page["next_cursor"].as_str().unwrap();
+    assert_eq!(first["id"], cursor);
+    let (status, next_page) = call(
+        &app,
+        "GET",
+        &format!("{users}?limit=1&after={cursor}"),
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(next_page["items"][0]["id"], first["id"]);
+    for path in [users.to_owned(), format!("{users}/{id}/inventory")] {
+        assert_eq!(
+            call(&app, "GET", &path, Some(access(&tech)), Value::Null)
+                .await
+                .0,
+            StatusCode::FORBIDDEN,
+        );
+    }
+
     let (status, rotated) = call(&app, "POST", "/api/v1/auth/refresh", None, refresh(&tech)).await;
     assert_eq!(status, StatusCode::OK, "{rotated}");
     assert_eq!(
@@ -466,6 +499,27 @@ async fn review_preserves_custody_under_concurrent_validation(db: PgPool) {
     )
     .await
     .1;
+    let (status, admin_page) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/admin/users/{owner}/inventory"),
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(admin_page, equipment_page);
+    let other = if owner == tech_a { tech_b } else { tech_a };
+    let (status, other_page) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/admin/users/{other}/inventory"),
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(other_page["items"], json!([]));
     assert_eq!(equipment_page["items"][0]["id"], winner["equipment_id"]);
     assert_eq!(
         equipment_page["items"][0]["identifiers"][2]["normalized_value"],

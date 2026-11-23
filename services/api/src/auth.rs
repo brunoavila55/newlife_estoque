@@ -6,7 +6,7 @@ use argon2::{
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State, rejection::QueryRejection},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -412,6 +412,45 @@ pub async fn web_logout(
         .headers_mut()
         .insert(header::SET_COOKIE, web_cookie("", 0));
     Ok(response)
+}
+
+#[derive(Deserialize)]
+pub struct UserListQuery {
+    after: Option<Uuid>,
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct UserPage {
+    items: Vec<User>,
+    next_cursor: Option<Uuid>,
+}
+
+pub async fn list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<UserListQuery>, QueryRejection>,
+) -> Result<Json<UserPage>, ApiError> {
+    let (mut tx, _) = authorize(&state.db, &headers, Role::Administrator).await?;
+    let Query(query) =
+        query.map_err(|_| ApiError::invalid("Parâmetros de paginação inválidos."))?;
+    let limit = query.limit.unwrap_or(50);
+    if !(1..=100).contains(&limit) {
+        return Err(ApiError::invalid("Use um limite de 1 a 100 itens."));
+    }
+    let mut items: Vec<User> = sqlx::query_as(
+        "SELECT id, name, login, role, active FROM users
+         WHERE ($1::uuid IS NULL OR id > $1) ORDER BY id LIMIT $2",
+    )
+    .bind(query.after)
+    .bind(limit + 1)
+    .fetch_all(&mut *tx)
+    .await?;
+    let has_more = items.len() > limit as usize;
+    items.truncate(limit as usize);
+    let next_cursor = items.last().filter(|_| has_more).map(|user| user.id);
+    tx.commit().await?;
+    Ok(Json(UserPage { items, next_cursor }))
 }
 
 pub async fn create_user(
