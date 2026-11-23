@@ -1,0 +1,973 @@
+openapi: 3.1.0
+info:
+  title: API de controle de equipamentos
+  version: 1.4.0
+  description: Contrato das Fases 1 a 5. Capturas recebidas aguardam processamento ou revisão.
+servers:
+  - url: http://127.0.0.1:3000
+security:
+  - bearer: []
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Verificar se o processo da API está ativo
+      security: []
+      responses:
+        '200':
+          description: Processo ativo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { const: ok }
+  /ready:
+    get:
+      operationId: readiness
+      summary: Verificar PostgreSQL e storage S3
+      security: []
+      responses:
+        '200':
+          description: Dependências disponíveis
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { const: ready }
+        '503':
+          description: Uma dependência está indisponível
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { const: unavailable }
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Expor métricas operacionais para o coletor
+      description: Requer o token independente METRICS_TOKEN. A rota fica indisponível quando ele está vazio.
+      security:
+        - operationsBearer: []
+      responses:
+        '200':
+          description: Exposição no formato textual do Prometheus
+          content:
+            text/plain:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/audit-events:
+    get:
+      operationId: listAuditEvents
+      summary: Consultar eventos de auditoria
+      description: Requer papel de administrador. Ordena por data mais recente.
+      parameters:
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Limit'
+        - name: entity_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Página de eventos
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  next_cursor: { type: [string, 'null'], format: uuid }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, actor_id, action, entity_type, entity_id, before_json, after_json, request_id, created_at]
+                      properties:
+                        id: { type: string, format: uuid }
+                        actor_id: { type: string, format: uuid }
+                        action: { type: string }
+                        entity_type: { type: string }
+                        entity_id: { type: string, format: uuid }
+                        before_json: {}
+                        after_json: {}
+                        request_id: { type: string, format: uuid }
+                        created_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/retention-report:
+    get:
+      operationId: getRetentionReport
+      summary: Contar capturas antigas e uploads incompletos
+      description: Requer papel de administrador e retorna contagens para planejar retenção.
+      parameters:
+        - name: older_than_days
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 36500 }
+      responses:
+        '200':
+          description: Contagens para o intervalo informado
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [older_than_days, incomplete_uploads, confirmed_captures]
+                properties:
+                  older_than_days: { type: integer }
+                  incomplete_uploads: { type: integer, minimum: 0 }
+                  confirmed_captures: { type: integer, minimum: 0 }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      summary: Iniciar sessão
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [login, password]
+              properties:
+                login: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200': { $ref: '#/components/responses/Session' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/refresh:
+    post:
+      operationId: refresh
+      summary: Renovar sessão e rotacionar os dois tokens
+      security: []
+      requestBody: { $ref: '#/components/requestBodies/RefreshToken' }
+      responses:
+        '200': { $ref: '#/components/responses/Session' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      summary: Revogar sessão pelo token de renovação
+      security: []
+      requestBody: { $ref: '#/components/requestBodies/RefreshToken' }
+      responses:
+        '204': { description: Sessão encerrada ou já revogada }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/web/login:
+    post:
+      operationId: webLogin
+      summary: Iniciar sessão web de técnico, estoquista ou administrador
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/WebRequest'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [login, password]
+              properties:
+                login: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200': { $ref: '#/components/responses/WebSession' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/web/refresh:
+    post:
+      operationId: webRefresh
+      summary: Renovar sessão web por cookie e rotacionar ambos os tokens
+      security:
+        - webRefreshCookie: []
+      parameters:
+        - $ref: '#/components/parameters/WebRequest'
+      responses:
+        '200': { $ref: '#/components/responses/WebSession' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/web/logout:
+    post:
+      operationId: webLogout
+      summary: Revogar sessão web e remover cookie
+      security:
+        - {}
+        - webRefreshCookie: []
+      parameters:
+        - $ref: '#/components/parameters/WebRequest'
+      responses:
+        '204':
+          description: Sessão encerrada
+          headers:
+            Set-Cookie:
+              description: Limpa o cookie de renovação.
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/captures:
+    get:
+      operationId: listReviewCaptures
+      summary: Listar capturas para revisão administrativa
+      description: Requer papel de administrador. Ordena por recebimento mais recente.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            enum: [pending, all, RECEIVED, OCR_PENDING, OCR_PROCESSING, NEEDS_REVIEW, OCR_FAILED, IDENTIFIED]
+            default: pending
+        - name: after
+          in: query
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        '200':
+          description: Página de capturas
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReviewCapture' }
+                  next_cursor: { type: [string, 'null'], format: uuid }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/captures/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getReviewCapture
+      summary: Consultar evidências da captura e o histórico recente de OCR
+      description: Requer papel de administrador. Retorna os 20 registros mais recentes e o resultado solicitado ou mais recente.
+      parameters:
+        - name: result_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Detalhes da captura
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ReviewCapture'
+                  - type: object
+                    required: [barcode_evidence, validated_identifiers, runs, result]
+                    properties:
+                      barcode_evidence:
+                        oneOf:
+                          - $ref: '#/components/schemas/BarcodeEvidence'
+                          - type: 'null'
+                      validated_identifiers:
+                        type: [array, 'null']
+                        items:
+                          allOf:
+                            - $ref: '#/components/schemas/SubmittedIdentifier'
+                            - type: object
+                              required: [normalized_value]
+                              properties:
+                                normalized_value: { type: string }
+                      runs:
+                        type: array
+                        items: { $ref: '#/components/schemas/OcrRun' }
+                      result:
+                        oneOf:
+                          - $ref: '#/components/schemas/OcrResult'
+                          - type: 'null'
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/captures/{id}/reprocess:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: reprocessCapture
+      summary: Solicitar nova leitura OCR
+      description: Requer papel de administrador. Preserva a evidência anterior e aceita repetição enquanto a leitura está na fila ou em execução.
+      responses:
+        '200':
+          description: Estado atual do reprocessamento
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { enum: [OCR_PENDING, OCR_PROCESSING] }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users:
+    post:
+      operationId: createUser
+      summary: Cadastrar técnico ou estoquista
+      description: Requer papel de administrador.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, login, role, password]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                login:
+                  type: string
+                  description: Após remover espaços externos e converter as letras ASCII para minúsculas, deve corresponder a ^[a-z0-9_.-]{3,64}$.
+                password: { $ref: '#/components/schemas/NewPassword' }
+                role: { enum: [technician, warehouse_clerk] }
+      responses:
+        '201':
+          description: Conta criada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users/{id}/disable:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: disableUser
+      summary: Desativar técnico ou estoquista e revogar suas sessões
+      description: Requer papel de administrador.
+      responses:
+        '204': { description: Conta desativada }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users/{id}/reset-password:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: resetPassword
+      summary: Redefinir senha de técnico ou estoquista e revogar suas sessões
+      description: Requer papel de administrador.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { $ref: '#/components/schemas/NewPassword' }
+      responses:
+        '204': { description: Senha alterada }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/me/inventory:
+    get:
+      operationId: listInventory
+      summary: Listar equipamentos sob custódia do técnico autenticado
+      parameters:
+        - name: after
+          in: query
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Página do estoque privado
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, identifiers]
+                      properties:
+                        id: { type: string, format: uuid }
+                        identifiers:
+                          type: array
+                          items:
+                            allOf:
+                              - $ref: '#/components/schemas/SubmittedIdentifier'
+                              - type: object
+                                required: [normalized_value]
+                                properties:
+                                  normalized_value: { type: string }
+                  next_cursor: { type: [string, 'null'], format: uuid }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/captures:
+    post:
+      operationId: createCaptureUpload
+      summary: Criar ou recuperar uma captura pelo UUID do dispositivo e pela conta do técnico
+      description: Envie a imagem para PUT /api/v1/captures/{id}/image e conclua a captura quando received for false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_capture_id, captured_at_device, sha256, byte_length]
+              properties:
+                client_capture_id: { type: string, format: uuid }
+                captured_at_device: { type: string, format: date-time }
+                sha256: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
+                byte_length: { type: integer, minimum: 1, maximum: 12582912 }
+                barcode_evidence:
+                  oneOf:
+                    - $ref: '#/components/schemas/BarcodeEvidence'
+                    - type: 'null'
+      responses:
+        '200': { $ref: '#/components/responses/CaptureStatus' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/captures/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getOwnCapture
+      summary: Consultar o recebimento e o estado de identificação de uma captura do técnico
+      responses:
+        '200': { $ref: '#/components/responses/CaptureStatus' }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/captures/{id}/image:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: uploadCaptureImage
+      summary: Enviar bytes da foto de uma captura do técnico
+      description: O servidor valida o tamanho, o SHA-256 e o conteúdo. Aceita JPEG, PNG e WebP com até 12 MiB, 24 megapixels e 8192 pixels por lado.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+          image/jpeg:
+            schema: { type: string, format: binary }
+          image/png:
+            schema: { type: string, format: binary }
+          image/webp:
+            schema: { type: string, format: binary }
+      responses:
+        '200': { $ref: '#/components/responses/CaptureStatus' }
+        '413': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/captures/{id}/complete:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: completeCapture
+      summary: Confirmar recebimento durável e enfileirar OCR de uma captura do técnico
+      responses:
+        '200': { $ref: '#/components/responses/CaptureStatus' }
+        '409':
+          description: Imagem ausente ou com tamanho ou SHA-256 divergente. Reenvie a imagem.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { const: IMAGE_NOT_READY }
+                  message: { type: string }
+                  request_id: { type: string, format: uuid }
+        '503': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/captures/{id}/image-url:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getCaptureImage
+      summary: Gerar URL temporária para o administrador visualizar a foto original
+      responses:
+        '200':
+          description: URL privada válida por 120 segundos
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expires_in]
+                properties:
+                  url: { type: string, format: uri }
+                  expires_in: { const: 120 }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/captures/{id}/review:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: reviewCapture
+      summary: Validar a identificação ou registrar pendência após inspeção humana
+      description: Requer papel de administrador. Validação exige imagem disponível. Repetir a validação com os mesmos valores brutos devolve a identificação anterior.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [decision, identifiers]
+                  properties:
+                    decision: { const: validate }
+                    ocr_result_id: { type: [string, 'null'], format: uuid }
+                    identifiers:
+                      type: array
+                      minItems: 1
+                      maxItems: 16
+                      items: { $ref: '#/components/schemas/SubmittedIdentifier' }
+                - type: object
+                  required: [decision, reason]
+                  properties:
+                    decision: { const: flag }
+                    reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200':
+          description: Identificação validada ou pendência explícita
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, equipment_id, issue]
+                properties:
+                  status: { enum: [IDENTIFIED, NEEDS_REVIEW] }
+                  equipment_id: { type: [string, 'null'], format: uuid }
+                  issue:
+                    type: [object, 'null']
+                    required: [code]
+                    properties:
+                      code: { enum: [MANUAL_REVIEW, DIFFERENT_CUSTODY, IDENTIFIER_MISMATCH, AMBIGUOUS_IDENTITY] }
+                      reason: { type: string }
+                      identifiers:
+                        type: array
+                        items: { type: object }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-technicians:
+    get:
+      operationId: listReceiptTechnicians
+      summary: Buscar técnicos para uma sessão de recebimento
+      description: Requer permissão warehouse:receive no depósito piloto.
+      parameters:
+        - name: search
+          in: query
+          schema: { type: string, maxLength: 120 }
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Página de técnicos
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, login]
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        login: { type: string }
+                  next_cursor: { type: [string, 'null'], format: uuid }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-sessions:
+    get:
+      operationId: listReceiptSessions
+      summary: Listar sessões do estoquista autenticado
+      parameters:
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: { enum: [all, open, closed], default: all }
+      responses:
+        '200':
+          description: Página de sessões
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReceiptSession' }
+                  next_cursor: { type: [string, 'null'], format: uuid }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: openReceiptSession
+      summary: Abrir uma sessão e fixar os equipamentos previstos
+      description: Repetir a chave do cliente com o mesmo técnico devolve a sessão existente.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_session_id, technician_id]
+              properties:
+                client_session_id: { type: string, format: uuid }
+                technician_id: { type: string, format: uuid }
+      responses:
+        '200': { $ref: '#/components/responses/ReceiptSession' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-sessions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getReceiptSession
+      summary: Consultar o relatório da sessão
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - name: after_item
+          in: query
+          schema: { type: string, format: uuid }
+        - name: after_scan
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Totais e páginas independentes de equipamentos e leituras
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session, totals, items, scans, next_item, next_scan]
+                properties:
+                  session: { $ref: '#/components/schemas/ReceiptSession' }
+                  totals: { $ref: '#/components/schemas/ReceiptTotals' }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReceiptItem' }
+                  scans:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReceiptScan' }
+                  next_item: { type: [string, 'null'], format: uuid }
+                  next_scan: { type: [string, 'null'], format: uuid }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-sessions/{id}/scan:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: scanReceiptLabel
+      summary: Registrar uma leitura e resolver correspondência
+      description: A leitura não transfere custódia. O segundo código, quando informado, deve apontar para o mesmo equipamento. Uma repetição com a mesma chave devolve a leitura gravada.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_scan_id, value]
+              properties:
+                client_scan_id: { type: string, format: uuid }
+                value: { type: string, minLength: 1, maxLength: 128 }
+                secondary_value: { type: [string, 'null'], minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: Leitura registrada inclusive em caso de divergência
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReceiptScan' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-sessions/{id}/confirm:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: confirmReceiptItem
+      summary: Confirmar recebimento físico de um item após uma leitura válida
+      description: Requer permissão warehouse:receive. A confirmação do mesmo item e leitura é idempotente, inclusive após encerrar a sessão.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [equipment_id, scan_id]
+              properties:
+                equipment_id: { type: string, format: uuid }
+                scan_id: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Movimento e confirmação persistidos
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [equipment_id, scan_id, movement_id, confirmed_at]
+                properties:
+                  equipment_id: { type: string, format: uuid }
+                  scan_id: { type: string, format: uuid }
+                  movement_id: { type: string, format: uuid }
+                  confirmed_at: { type: string, format: date-time }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-sessions/{id}/close:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: closeReceiptSession
+      summary: Encerrar a sessão e preservar faltantes e divergências
+      description: Exige justificativa quando houver faltantes ou divergências. Repetir devolve o encerramento já registrado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: [string, 'null'], maxLength: 500 }
+      responses:
+        '200': { $ref: '#/components/responses/ReceiptSession' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-sessions/{id}/items/{equipment_id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/EquipmentId'
+    get:
+      operationId: getReceiptItem
+      summary: Consultar um equipamento previsto
+      responses:
+        '200':
+          description: Item previsto
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReceiptItem' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-sessions/{id}/items/{equipment_id}/image-url:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/EquipmentId'
+    get:
+      operationId: getReceiptItemImage
+      summary: Obter a foto original do item após uma leitura correspondente
+      responses:
+        '200':
+          description: URL da foto válida por 120 segundos
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expires_in]
+                properties:
+                  url: { type: string, format: uri }
+                  expires_in: { const: 120 }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+    operationsBearer: { type: http, scheme: bearer }
+    webRefreshCookie: { type: apiKey, in: cookie, name: stock_web_refresh }
+  parameters:
+    EquipmentId:
+      in: path
+      name: equipment_id
+      required: true
+      schema: { type: string, format: uuid }
+    After:
+      in: query
+      name: after
+      schema: { type: string, format: uuid }
+    Limit:
+      in: query
+      name: limit
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    WebRequest:
+      in: header
+      name: X-Stock-Web
+      required: true
+      schema: { const: '1' }
+    Id:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+  requestBodies:
+    RefreshToken:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [refresh_token]
+            properties:
+              refresh_token: { type: string, pattern: '^[A-Za-z0-9]{48}$' }
+  responses:
+    ReceiptSession:
+      description: Sessão de recebimento no escopo do estoquista
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ReceiptSession' }
+    WebSession:
+      description: Acesso em memória do aplicativo e cookie de renovação HttpOnly, Secure e SameSite Strict.
+      headers:
+        Set-Cookie:
+          description: Token de renovação rotacionado. A sessão permanece limitada a sete dias desde o login.
+          schema: { type: string }
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [access_token, expires_in, user]
+            properties:
+              access_token: { type: string }
+              expires_in: { type: integer, minimum: 0, maximum: 3600 }
+              user: { $ref: '#/components/schemas/User' }
+    CaptureStatus:
+      description: Estado da captura. received indica confirmação durável no servidor.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [id, status, received]
+            properties:
+              id: { type: string, format: uuid }
+              status: { enum: [AWAITING_IMAGE, RECEIVED, OCR_PENDING, OCR_PROCESSING, NEEDS_REVIEW, OCR_FAILED, IDENTIFIED] }
+              received: { type: boolean }
+    Error:
+      description: Erro de validação, autorização ou processamento
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, message, request_id]
+            properties:
+              code: { type: string }
+              message: { type: string }
+              request_id: { type: string, format: uuid }
+    Session:
+      description: Sessão com acesso de até uma hora e renovação limitada a sete dias desde o login
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [access_token, refresh_token, expires_in, user]
+            properties:
+              access_token: { type: string }
+              refresh_token: { type: string }
+              expires_in: { type: integer, minimum: 0, maximum: 3600 }
+              user: { $ref: '#/components/schemas/User' }
+  schemas:
+    ReceiptSession:
+      type: object
+      required: [id, technician_id, technician_name, warehouse_id, warehouse_name, opened_at, closed_at, closing_reason]
+      properties:
+        id: { type: string, format: uuid }
+        technician_id: { type: string, format: uuid }
+        technician_name: { type: string }
+        warehouse_id: { type: string, format: uuid }
+        warehouse_name: { type: string }
+        opened_at: { type: string, format: date-time }
+        closed_at: { type: [string, 'null'], format: date-time }
+        closing_reason: { type: [string, 'null'] }
+    ReceiptTotals:
+      type: object
+      required: [expected, confirmed, missing, duplicates, divergences]
+      properties:
+        expected: { type: integer, minimum: 0 }
+        confirmed: { type: integer, minimum: 0 }
+        missing: { type: integer, minimum: 0 }
+        duplicates: { type: integer, minimum: 0 }
+        divergences: { type: integer, minimum: 0 }
+    ReceiptItem:
+      type: object
+      required: [equipment_id, matched_scan_id, confirmed_at, identifiers]
+      properties:
+        equipment_id: { type: string, format: uuid }
+        matched_scan_id: { type: [string, 'null'], format: uuid }
+        confirmed_at: { type: [string, 'null'], format: date-time }
+        identifiers:
+          type: array
+          items: { $ref: '#/components/schemas/SubmittedIdentifier' }
+    ReceiptScan:
+      type: object
+      required: [id, equipment_id, value, secondary_value, result, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        equipment_id: { type: [string, 'null'], format: uuid }
+        value: { type: string }
+        secondary_value: { type: [string, 'null'] }
+        result: { enum: [MATCHED, DUPLICATE_SCAN, UNKNOWN, AMBIGUOUS, OTHER_TECHNICIAN, ALREADY_RECEIVED, NOT_IN_SESSION, IDENTIFIER_MISMATCH] }
+        created_at: { type: string, format: date-time }
+    BarcodeEvidence:
+      type: object
+      additionalProperties: false
+      required: [raw_value, source]
+      properties:
+        raw_value:
+          type: string
+          minLength: 1
+          description: Valor bruto de até 128 bytes em UTF-8.
+        source: { enum: [MANUAL, BARCODE_DETECTOR, ZXING] }
+    ReviewCapture:
+      type: object
+      required: [id, technician_name, status, captured_at_device, received_at_server, equipment_id, review_issue]
+      properties:
+        id: { type: string, format: uuid }
+        technician_name: { type: string }
+        status: { enum: [RECEIVED, OCR_PENDING, OCR_PROCESSING, NEEDS_REVIEW, OCR_FAILED, IDENTIFIED] }
+        captured_at_device: { type: string, format: date-time }
+        received_at_server: { type: string, format: date-time }
+        equipment_id: { type: [string, 'null'], format: uuid }
+        review_issue:
+          type: [object, 'null']
+          required: [code]
+          properties:
+            code: { enum: [MANUAL_REVIEW, DIFFERENT_CUSTODY, IDENTIFIER_MISMATCH, AMBIGUOUS_IDENTITY] }
+            reason: { type: string }
+    OcrRun:
+      type: object
+      required: [id, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { enum: [RECOGNIZED, FAILED] }
+        created_at: { type: string, format: date-time }
+    OcrResult:
+      allOf:
+        - $ref: '#/components/schemas/OcrRun'
+        - type: object
+          required: [provider, model_version, raw_tsv, suggestions, warnings, failure_code]
+          properties:
+            provider: { type: string }
+            model_version: { type: string }
+            raw_tsv: { type: [string, 'null'] }
+            failure_code: { type: [string, 'null'] }
+            warnings:
+              type: array
+              items: { type: string }
+            suggestions:
+              type: array
+              items:
+                type: object
+                required: [kind, label, raw_value, normalized_value, confidence]
+                properties:
+                  kind: { enum: [SERIAL, MAC, MODEL, MANUFACTURER] }
+                  label: { type: string }
+                  raw_value: { type: string }
+                  normalized_value: { type: string }
+                  confidence: { type: [number, 'null'], minimum: 0, maximum: 1 }
+    NewPassword:
+      type: string
+      format: password
+      minLength: 12
+      description: Limite de 256 bytes em UTF-8.
+    User:
+      type: object
+      required: [id, name, login, active, role]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        login: { type: string }
+        active: { type: boolean }
+        role: { enum: [technician, warehouse_clerk, administrator] }
+    SubmittedIdentifier:
+      type: object
+      required: [kind, raw_value]
+      properties:
+        kind: { enum: [SERIAL, MAC, BARCODE] }
+        raw_value:
+          type: string
+          minLength: 1
+          description: Valor bruto de até 128 bytes em UTF-8.

@@ -1,0 +1,32 @@
+name: newlife-stock
+services:
+  postgres:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_DB: stock
+      POSTGRES_USER: stock
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock -d stock"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  seaweedfs:
+    image: docker.io/chrislusf/seaweedfs:4.55
+    command: ["mini", "-dir=/data"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Defina AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Defina AWS_SECRET_ACCESS_KEY}
+      S3_BUCKET: ${S3_BUCKET:?Defina S3_BUCKET}
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - seaweed-data:/data
+
+volumes:
+  postgres-data:
+  seaweed-data:

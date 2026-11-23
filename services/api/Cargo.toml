@@ -1,0 +1,29 @@
+[package]
+name = "stock-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+argon2 = "0.5"
+axum = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+dotenvy = "0.15"
+futures-util = "0.3"
+percent-encoding = "2"
+object_store = { version = "0.12", default-features = false, features = ["aws", "tls-webpki-roots"] }
+rand = "0.8"
+regex = "1"
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "json", "chrono", "migrate", "macros"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "process", "io-util", "time"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
