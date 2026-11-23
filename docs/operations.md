@@ -49,3 +49,9 @@ Copie o diretório concluído para armazenamento criptografado fora do host e co
 4. Se o processo falhar após começar a escrever no destino, revise a causa e use um novo banco e bucket vazios. Verifique o resultado antes de promover qualquer destino restaurado.
 
 O dump é restaurado em uma transação SQL, e o bucket é preenchido depois. A verificação final é o ponto de decisão para usar o destino. Restrinja o acesso a backups autênticos, pois um dump PostgreSQL pode conter comandos executáveis. [Documentação do pg_restore](https://www.postgresql.org/docs/17/app-pgrestore.html)
+
+## Deploy em retiradas.newlifefibra.com.br
+
+O Compose de `infra/deploy` compila a API e o PWA e mantém PostgreSQL e SeaweedFS em uma rede Docker interna. O Nginx do aplicativo limita tentativas de login e publica somente leituras assinadas das fotos pela origem HTTPS do PWA. O proxy externo deve preservar o cabeçalho Host e definir X-Real-IP com o endereço do cliente. A rede de entrada `newlife-retiradas-edge` usa `172.30.245.0/24` e liga somente o proxy externo e o Nginx do aplicativo.
+
+Mantenha `DB_OWNER_PASSWORD`, `DB_APP_PASSWORD`, `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` fora do checkout. Passe o arquivo de segredos por `docker compose --env-file`. Suba PostgreSQL e SeaweedFS, execute o serviço de manutenção `migrate` e suba API, worker e web. Crie o primeiro administrador com `docker compose run --rm migrate bootstrap-admin` em um terminal seguro.
