@@ -23,3 +23,4 @@ RUN npm run build
 FROM nginx:alpine AS web
 COPY infra/deploy/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=web-build /src/dist /usr/share/nginx/html
+RUN chmod -R a+rX /usr/share/nginx/html
