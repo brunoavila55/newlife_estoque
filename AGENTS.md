@@ -63,9 +63,18 @@ Construir um sistema de rastreabilidade de roteadores e outros equipamentos reco
 2. Scanner lê serial ou MAC do equipamento físico. Normalizar entrada antes da busca.
 3. Backend procura correspondências no escopo correto. Se não existir, se houver mais de uma, ou houver incompatibilidade, apresentar ocorrência; não liberar automaticamente.
 4. Interface exibe registro encontrado e, quando necessário, foto original para inspeção.
-5. Estoquista confirma **recebimento físico**; o servidor executa transação de transferência de custódia e registra `stock_movement` e `audit_event`.
+5. Estoquista confere itens de integridade/acessórios (presença e tipo de fonte de alimentação, cabos e estado físico) e confirma o **recebimento físico**. O servidor executa transação de transferência de custódia e registra `stock_movement` e `audit_event`.
 6. Somente após o commit da transação o item deixa de constar como pendente do técnico e entra na custódia do estoque.
-7. Sessão de recebimento mostra confirmados, faltantes, duplicados e divergentes. Fechamento não deve mascarar pendências.
+7. Sessão de recebimento mostra confirmados, faltantes, duplicados e divergentes. Fechamento não deve mascarar pendências e gera comprovante/termo de quitação de devolução.
+
+### C. Módulos e usabilidade da área do estoquista
+A interface do estoquista deve ser organizada em módulos de navegação claros, projetada para alta produtividade com leitor de código de barras (scanner HID) e mínimo uso de mouse:
+1. **Mesa de Recebimento (Bip & Conferência):** abertura de sessão por técnico, bipe contínuo com foco automático permanente no input, feedback sonoro imediato (Web Audio API com tons distintos para sucesso, duplicado e divergência), barra de progresso visual (conferidos vs. faltantes) e validação rápida por atalho/teclado.
+2. **Painel de Saldos dos Técnicos (Custódia em Campo):** visão consolidada de todos os técnicos com total de equipamentos em posse, tempo de retenção (alerta de técnicos sem devolver há muitos dias) e listagem prévia dos aparelhos recolhidos antes da chegada ao balcão.
+3. **Consulta Rastreável de Equipamento (Busca Avulsa):** bipe rápido de qualquer roteador no depósito para exibir imediatamente histórico, fotos originais da coleta, responsável anterior e status atual.
+4. **Triagem & Destinação Pós-Recebimento:** classificação operacional pós-conferência (bancada de testes/reset, higienização, sucata/queimado ou pronto para reinstalação).
+5. **Comprovantes e Histórico:** consulta de sessões encerradas com emissão de comprovante digital de devolução (resumo imprimível ou exportável para técnico e estoquista prevenirem litígios).
+6. **Tratamento de Exceções em Balcão:** suporte a transferência auditada caso o técnico entregue roteador recolhido por colega, registro assistido de itens com etiqueta danificada e entrada avulsa com justificativa quando a foto na rua não tiver sido feita.
 
 ## 5. Modelo de domínio inicial
 
@@ -123,8 +132,11 @@ Se existirem perdas, avarias, devolução revertida ou transferência entre téc
 - `POST /api/v1/captures/{id}/review` corrige identificação com trilha de auditoria.
 - `POST /api/v1/receipt-sessions` abre sessão de devolução.
 - `POST /api/v1/receipt-sessions/{id}/scan` resolve leitura e retorna resultado, sem transferência automática.
-- `POST /api/v1/receipt-sessions/{id}/confirm` confirma item específico com idempotência e transação.
+- `POST /api/v1/receipt-sessions/{id}/confirm` confirma item específico com idempotência e transação (com dados opcionais de integridade e acessórios como presença de fonte).
 - `GET /api/v1/receipt-sessions/{id}` apresenta resultado consolidado.
+- `GET /api/v1/receipt-sessions/{id}/voucher` gera dados estruturados do comprovante/recibo de quitação de devolução.
+- `GET /api/v1/warehouse/technicians-summary` lista técnicos com contagem de equipamentos em posse e tempo de retenção.
+- `GET /api/v1/warehouse/equipment/lookup` consulta rápida de roteador por serial ou MAC para rastreamento no depósito.
 - `GET /api/v1/audit-events` restrito a papel autorizado.
 
 Endpoints acima são proposta inicial; gerar OpenAPI e manter contratos versionados. Usar paginação, filtro, validação de payload e erros padronizados.
@@ -152,7 +164,10 @@ Endpoints acima são proposta inicial; gerar OpenAPI e manter contratos versiona
 - Duas conferências simultâneas do mesmo equipamento não podem ambas ser aprovadas.
 - Scanner desconhecido, dois equipamentos correspondentes, equipamento de outro técnico, já recebido e serial/MAC divergente são casos explícitos de erro ou exceção.
 - O estoquista não deve dar baixa em massa sem listar claramente o que foi conferido. A confirmação por item é a fonte de verdade.
-- Recebimentos excepcionais sem etiqueta exigem fluxo administrativo separado, justificativa, foto e auditoria.
+- Checklist de integridade e acessórios (presença de fonte original/paralela/ausente, cabos e estado físico) deve ser registrado no momento da confirmação para prevenir recebimento incompleto sem registro.
+- Feedback sonoro (Web Audio API) e auto-foco persistente garantem uso contínuo do leitor HID sem necessidade de alternar leitor e mouse a cada roteador conferido.
+- Fechamento da sessão emite termo de quitação/comprovante com identificação de todos os seriais recebidos e pendências remanescentes, disponível para impressão ou exportação.
+- Recebimentos excepcionais sem etiqueta ou troca entre técnicos exigem fluxo com justificativa, foto e auditoria.
 
 ## 11. Segurança, privacidade e observabilidade
 
@@ -208,9 +223,11 @@ Não forçar abstrações artificiais. Separar crates somente quando os limites 
 - Worker com extração de serial/MAC e regras de normalização.
 - Tela de revisão manual de leituras incertas, incompatíveis e duplicadas.
 
-### Fase 4 — Recebimento
-- Painel web de sessões de recebimento com leitor HID.
-- Busca por código, validação visual, confirmação transacional e relatório de divergências.
+### Fase 4 — Recebimento e Produtividade do Estoquista
+- Interface modular do estoquista: abas de recebimento, saldos de técnicos em campo, consulta avulsa e comprovantes.
+- Mesa de conferência ágil com leitor HID: auto-foco persistente, feedback sonoro Web Audio API, atalhos de teclado e barra de progresso em tempo real.
+- Busca rápida por serial/MAC, conferência de integridade/acessórios (fonte de alimentação e conservação), confirmação transacional e relatório de divergências.
+- Emissão de comprovante digital de devolução (termo de quitação) com lista de seriais e pendências.
 
 ### Fase 5 — Robustez de produção
 - Controle de acessos detalhado, observabilidade, testes E2E, retenção, backup/restauração e operação em rede instável.
@@ -234,6 +251,9 @@ Não forçar abstrações artificiais. Separar crates somente quando os limites 
 15. Simular quota insuficiente, falha ao salvar Blob e limpeza de cache do Service Worker: mostrar erro sem perder dados previamente salvos e sem marcar uploads inexistentes como concluídos.
 16. Testar scanner HID com sufixo `Enter`, câmera com código de barras legível, fallback ZXing e entrada manual.
 17. Validar que atualização do PWA não elimina fotos pendentes no IndexedDB.
+18. Validar conferência ágil com leitor HID sem alternância constante de mouse (auto-foco contínuo, validação por atalho e feedback sonoro diferenciado para sucesso, duplicado e divergência).
+19. Registrar estado de conservação e acessórios (presença e tipo de fonte) na confirmação com persistência auditável.
+20. Emitir comprovante de devolução ao fechar a sessão, conferindo lista de seriais confirmados e pendências remanescentes.
 
 ## 15. Como agentes de IA devem trabalhar neste repositório
 
