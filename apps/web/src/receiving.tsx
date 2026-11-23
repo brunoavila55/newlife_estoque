@@ -111,7 +111,7 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
     </div>
     {error && <p className="alert" role="alert">{error}</p>}
     {selected ? <ReceiptSession key={selected} owner={clerk.id} id={selected} fail={fail}
-      back={() => { setSelected(undefined); void loadSessions() }} /> : <>
+      back={() => { setSelected(undefined); void loadSessions() }} /> : <div className="desk-grid">
       <section className="card">
         <h2>Abrir recebimento</h2>
         <form className="receipt-form" onSubmit={(event) => {
@@ -135,7 +135,7 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
       <section className="card">
         <div className="section-head"><h2>Minhas sessões</h2>
           <button disabled={findingSessions} onClick={() => void loadSessions()}>Atualizar sessões</button></div>
-        {sessions?.items.length === 0 && <p>Nenhuma sessão registrada.</p>}
+        {sessions?.items.length === 0 && <p className="empty-state">Nenhuma sessão registrada.</p>}
         {!!sessions?.items.length && <ul className="items">{sessions.items.map((session) => (
           <li key={session.id} className="queue-row">
             <div><strong>{session.technician_name}</strong><br />
@@ -147,7 +147,7 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
         {sessions?.next_cursor && <button disabled={findingSessions}
           onClick={() => void loadSessions(sessions.next_cursor!)}>Mais sessões</button>}
       </section>
-    </>}
+    </div>}
   </>
 }
 
@@ -276,7 +276,7 @@ function ReceiptSession({ owner, id, fail, back }: {
       {error && <p role="alert" className="alert">{error}</p>}
       {notice && <p role="status" className="success">{notice}</p>}
     </section>
-    {open && <section className="card">
+    {open && <section className="card capture-card">
       <h2>Ler etiqueta</h2>
       <form className="receipt-form" onSubmit={(event) => { event.preventDefault(); void scan() }}>
         <label className="review-field">Código lido<input ref={field} name="scan" value={value} onKeyDown={suffix}

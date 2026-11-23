@@ -43,17 +43,23 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
     }
   }
 
-  return <section className="card login">
-    <h1>{reauthenticate ? 'Entre novamente' : 'Entrar no Newlife Estoque'}</h1>
-    <p>{reauthenticate
-      ? 'As fotos salvas ficam vinculadas à conta que as registrou.'
-      : 'Entre com a conta fornecida pelo administrador.'}</p>
-    <form onSubmit={(event) => void submit(event)}>
-      <label>Login<input name="login" autoComplete="username" autoCapitalize="none" required /></label>
-      <label>Senha<input name="password" type="password" autoComplete="current-password" required /></label>
-      <button className="primary" disabled={busy}>{busy ? 'Entrando…' : 'Entrar'}</button>
-    </form>
-    {notice && <p className="alert" role="alert">{notice}</p>}
+  return <section className="login">
+    <div className="login-brand">
+      <div className="logo-tile"><img src="/icons/new-life-logo.png" alt="New Life" width="560" height="313" /></div>
+      <p>Controle de<br className="desktop-break" /> equipamentos</p>
+    </div>
+    <div className="login-panel">
+      <h1>{reauthenticate ? 'Entre novamente' : 'Entrar no New Life'}</h1>
+      <p>{reauthenticate
+        ? 'As fotos salvas ficam vinculadas à conta que as registrou.'
+        : 'Entre com a conta fornecida pelo administrador.'}</p>
+      <form onSubmit={(event) => void submit(event)}>
+        <label>Login<input name="login" autoComplete="username" autoCapitalize="none" required /></label>
+        <label>Senha<input name="password" type="password" autoComplete="current-password" required /></label>
+        <button className="primary" disabled={busy}>{busy ? 'Entrando…' : 'Entrar'}</button>
+      </form>
+      {notice && <p className="alert" role="alert">{notice}</p>}
+    </div>
   </section>
 }
 
@@ -97,7 +103,7 @@ function InventoryPanel({ owner, denied }: { owner: string; denied: () => void }
     <div className="section-head"><h2>Estoque particular</h2><button onClick={() => void load()} disabled={loading}>Atualizar</button></div>
     {error && <p className="alert" role="alert">{error}</p>}
     {loading && !page && <p role="status">Consultando seu estoque…</p>}
-    {page?.items.length === 0 && <p>Nenhum equipamento identificado em sua custódia.</p>}
+    {page?.items.length === 0 && <p className="empty-state">Nenhum equipamento identificado em sua custódia.</p>}
     {!!page?.items.length && <ul className="items">{page.items.map((item) =>
       <li key={item.id}>
         <strong>Em posse · aguardando devolução</strong>
@@ -197,7 +203,7 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
       <button aria-current={tab === 'inventory' ? 'page' : undefined} onClick={() => setTab('inventory')}>Estoque particular</button>
     </nav>
     {notice && <p role="alert" className="alert">{notice}</p>}
-    {tab === 'inventory' ? <InventoryPanel owner={profile.id} denied={deny} /> : <>
+    {tab === 'inventory' ? <InventoryPanel owner={profile.id} denied={deny} /> : <div className="desk-grid">
       <section className="card capture-card">
         <h2>Fotografar etiqueta</h2>
         <p>Enquadre a etiqueta inteira e confira se o serial e os MACs estão legíveis.</p>
@@ -227,7 +233,7 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
             {syncing ? 'Sincronizando…' : 'Sincronizar agora'}
           </button>
         </div>
-        {captures?.length === 0 && <p>Nenhuma foto registrada neste dispositivo.</p>}
+        {captures?.length === 0 && <p className="empty-state">Nenhuma foto registrada neste dispositivo.</p>}
         {!!captures?.length && <ul className="items">{captures.map((capture) => <li key={capture.id} className="queue-row">
           <div><strong>{captureLabel(capture)}</strong><br /><time dateTime={capture.capturedAt}>{dateTime.format(new Date(capture.capturedAt))}</time>
             {capture.lastAttemptAt && capture.state !== 'UPLOADED' && <p className="muted">Última tentativa em {dateTime.format(capture.lastAttemptAt)}</p>}
@@ -238,7 +244,7 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
         </li>)}</ul>}
         {!!pending && <p className="muted">Mantenha o aplicativo aberto para enviar. Limpar os dados do site, desinstalar o app ou perder o armazenamento do navegador pode apagar fotos pendentes.</p>}
       </section>
-    </>}
+    </div>}
   </>
 }
 
@@ -336,7 +342,7 @@ function App() {
   const needsLogin = !profile || authDenied || clock > profile.offlineUntil
   return <>
     <header className="topbar"><div className="topbar-content">
-      <div className="brand"><img src="/icons/icon-192.png" alt="" width="42" height="42" /><span>Newlife Estoque</span></div>
+      <div className="brand"><img src="/icons/favicon.png" alt="" width="42" height="42" /><span>New Life <small>Estoque</small></span></div>
       <span className="connectivity" data-online={connected}><i aria-hidden="true" />{connected ? 'Rede disponível' : 'Sem conexão'}</span>
     </div></header>
     <main>

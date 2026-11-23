@@ -12,16 +12,16 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       manifest: {
-        name: 'Newlife · Controle de equipamentos',
-        short_name: 'Newlife Estoque',
+        name: 'New Life · Controle de equipamentos',
+        short_name: 'New Life Estoque',
         description: 'Captura offline de etiquetas e consulta da custódia de equipamentos.',
         lang: 'pt-BR',
         id: '/',
         start_url: '/',
         scope: '/',
         display: 'standalone',
-        theme_color: '#11332b',
-        background_color: '#f5f7f4',
+        theme_color: '#096bd8',
+        background_color: '#f3f7fc',
         icons: [
           { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },

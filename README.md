@@ -1,4 +1,4 @@
-# Controle de recolhimento e devolução
+# New Life · Controle de recolhimento e devolução
 
 O sistema inclui a API Rust de custódia, o PWA do técnico para fotografar etiquetas offline, a revisão administrativa de OCR e o recebimento físico no depósito piloto. Consulte o [contrato OpenAPI](docs/api/openapi.yaml) para os endpoints e a [arquitetura](docs/architecture.md) para as regras implementadas.
 
