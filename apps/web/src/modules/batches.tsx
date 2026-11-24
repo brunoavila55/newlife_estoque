@@ -1,17 +1,9 @@
+import { Icon } from '../components/icon'
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type User } from '../db'
-import type { Batch, BatchStatus } from '../types'
+import { batchStatusLabels, type Batch, type BatchStatus } from '../types'
 import { QRCodeSVG } from '../components/qrcode'
-
-const statusLabels: Record<BatchStatus, string> = {
-  DRAFT: 'Rascunho',
-  PRESENTED: 'Apresentado no Balcão',
-  IN_CHECK: 'Em Conferência',
-  PARTIAL: 'Entrega Parcial',
-  COMPLETED: 'Devolução Concluída',
-  CANCELLED: 'Cancelado',
-}
 
 const statusColors: Record<BatchStatus, string> = {
   DRAFT: '#64748b',
@@ -69,7 +61,7 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
         <div className="receipt-print-modal">
           <div className="receipt-print-actions no-print">
             <button className="primary" onClick={() => window.print()}>
-              🖨️ Imprimir / Salvar em PDF
+              Imprimir / Salvar em PDF
             </button>
             <button onClick={() => setPrintBatch(null)}>Fechar</button>
           </div>
@@ -96,7 +88,7 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
               </div>
               <div>
                 <dt>Status do Lote:</dt>
-                <dd>{statusLabels[printBatch.status]}</dd>
+                <dd>{batchStatusLabels[printBatch.status]}</dd>
               </div>
               <div>
                 <dt>Total de Itens Declarados:</dt>
@@ -171,11 +163,7 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
 
       <div className="section-head">
         <div>
-          <h2>Lotes e Entregas em Balcão (Cap. 07)</h2>
-          <p className="muted">
-            Acompanhamento de lotes declarados pelos técnicos, conferência em lote, entrega parcial e emissão de
-            comprovantes.
-          </p>
+          <h1>Lotes e entregas</h1>
         </div>
       </div>
 
@@ -195,7 +183,7 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
               className={`chip ${filter === st ? 'active' : ''}`}
               onClick={() => setFilter(st)}
             >
-              {st === 'ALL' ? 'Todos os Lotes' : statusLabels[st]}
+              {st === 'ALL' ? 'Todos os Lotes' : batchStatusLabels[st]}
             </button>
           ))}
         </div>
@@ -249,7 +237,7 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
                             borderColor: statusColors[batch.status],
                           }}
                         >
-                          {statusLabels[batch.status]}
+                          {batchStatusLabels[batch.status]}
                         </span>
                       </td>
                       <td>{dateTime.format(new Date(batch.created_at))}</td>
@@ -263,7 +251,7 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
                               setSelectedBatch(batch)
                             }}
                           >
-                            👁️
+                            Ver
                           </button>
                           <button
                             className="btn-icon"
@@ -273,7 +261,7 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
                               setPrintBatch(batch)
                             }}
                           >
-                            🖨️
+                            Imprimir
                           </button>
                         </div>
                       </td>
@@ -305,11 +293,11 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
                     borderColor: statusColors[selectedBatch.status],
                   }}
                 >
-                  {statusLabels[selectedBatch.status]}
+                  {batchStatusLabels[selectedBatch.status]}
                 </span>
               </div>
-              <button className="close-btn" onClick={() => setSelectedBatch(null)}>
-                ✕
+              <button className="close-btn" aria-label="Fechar" onClick={() => setSelectedBatch(null)}>
+                <Icon name="close" />
               </button>
             </div>
 
@@ -348,7 +336,7 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
                       </div>
                     </div>
                     <span className={`badge status-${item.status.toLowerCase()}`}>
-                      {item.status === 'ACCEPTED' ? '✓ Aceito' : item.status === 'PENDING' ? '⏳ Pendente' : '⚠️ Divergência'}
+                      {item.status === 'ACCEPTED' ? 'Aceito' : item.status === 'PENDING' ? 'Pendente' : 'Divergência'}
                     </span>
                   </li>
                 ))}
@@ -361,14 +349,14 @@ export function BatchesModule({ user, onOpenSession }: { user: User; onOpenSessi
                   className="primary full-width"
                   onClick={() => onOpenSession(selectedBatch)}
                 >
-                  ⚡ Iniciar Conferência deste Lote
+                  Iniciar Conferência deste Lote
                 </button>
               )}
               <button
                 className="full-width"
                 onClick={() => setPrintBatch(selectedBatch)}
               >
-                🖨️ Imprimir Termo de Quitação
+                Imprimir Termo de Quitação
               </button>
               {selectedBatch.status !== 'COMPLETED' && selectedBatch.status !== 'CANCELLED' && (
                 <button

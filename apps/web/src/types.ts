@@ -1,6 +1,3 @@
-// AGENTS.md & Especificação New Life (24 Capítulos)
-// Definições de Tipos e Entidades do Domínio
-
 export type UserRole =
   | 'technician'
   | 'warehouse_clerk'
@@ -27,6 +24,15 @@ export type BatchStatus =
   | 'PARTIAL'
   | 'COMPLETED'
   | 'CANCELLED'
+
+export const batchStatusLabels: Record<BatchStatus, string> = {
+  DRAFT: 'Rascunho',
+  PRESENTED: 'Apresentado',
+  IN_CHECK: 'Em conferência',
+  PARTIAL: 'Entrega parcial',
+  COMPLETED: 'Devolução concluída',
+  CANCELLED: 'Cancelado',
+}
 
 export interface BatchItem {
   equipment_id: string

@@ -1,3 +1,4 @@
+import { Icon } from '../components/icon'
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type User } from '../db'
@@ -169,11 +170,7 @@ export function DiscrepanciesModule({ user }: { user: User }) {
     <div className="module-container">
       <div className="section-head">
         <div>
-          <h2>Divergências e Exceções Operacionais (Cap. 10)</h2>
-          <p className="muted">
-            Tratamento de códigos desconhecidos, equipamentos em quarentena física, itens de outro técnico, faltantes e
-            avarias. Toda resolução é auditada.
-          </p>
+          <h1>Divergências e exceções</h1>
         </div>
         {(!discrepancies || discrepancies.length === 0) && (
           <button onClick={() => void seedSampleDiscrepancies()}>+ Carregar Exemplos de Exceções</button>
@@ -272,8 +269,8 @@ export function DiscrepanciesModule({ user }: { user: User }) {
                   {dateTime.format(new Date(selectedDiscrepancy.created_at))}
                 </p>
               </div>
-              <button className="close-btn" onClick={() => setSelectedDiscrepancy(null)}>
-                ✕
+              <button className="close-btn" aria-label="Fechar" onClick={() => setSelectedDiscrepancy(null)}>
+                <Icon name="close" />
               </button>
             </div>
 

@@ -98,11 +98,8 @@ export function DiagnosticsModule() {
     <div className="module-container">
       <div className="section-head">
         <div>
-          <h2>Diagnóstico e Bancada de Teste de Leitores HID (Cap. 09)</h2>
-          <p className="muted">
-            Homologação de scanners USB HID e leitores Bluetooth em modo teclado. Medição de rajada em milissegundos,
-            detecção de sufixo (Enter/Tab) e validação de padrões sem alterar o estoque.
-          </p>
+          <h1>Teste de leitor</h1>
+          <p className="muted">Leia um código para testar o leitor e verificar se ele envia Enter ou Tab.</p>
         </div>
         <div className="actions">
           <label className="check-label-inline">
@@ -158,8 +155,8 @@ export function DiagnosticsModule() {
               <small className="muted">
                 {cadence !== null
                   ? cadence < 35
-                    ? '⚡ Scanner Óptico (Alta Velocidade)'
-                    : '⌨️ Digitação Manual Detectada'
+                    ? 'Scanner Óptico (Alta Velocidade)'
+                    : 'Digitação Manual Detectada'
                   : 'Aguardando bipe'}
               </small>
             </div>
@@ -202,8 +199,8 @@ export function DiagnosticsModule() {
                       {item.is_hardware_scanner ? 'Leitor HID' : 'Teclado Manual'} ({item.keystroke_cadence_ms}ms)
                     </span>
                     <span className="badge badge-purple">Sufixo: {item.terminator}</span>
-                    {item.mac_valid && <span className="badge badge-success">✓ Formato MAC Válido</span>}
-                    {item.serial_valid && <span className="badge badge-success">✓ Formato Serial Válido</span>}
+                    {item.mac_valid && <span className="badge badge-success">Formato MAC Válido</span>}
+                    {item.serial_valid && <span className="badge badge-success">Formato Serial Válido</span>}
                   </div>
                 </li>
               ))}

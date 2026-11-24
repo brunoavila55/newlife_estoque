@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { Icon, type IconName } from './icon'
 import type { UserRole } from '../types'
 import type { User } from '../db'
 
@@ -32,38 +34,42 @@ const roleNames: Record<UserRole, string> = {
 }
 
 export function Sidebar({ currentModule, onSelectModule, user, onLogout }: SidebarProps) {
+  const [menuOpen, setMenuOpen] = useState(false)
   const role = (user.role ?? 'warehouse_clerk') as UserRole
   const isAdminOrSuper = role === 'administrator' || role === 'supervisor' || role === 'platform_admin'
 
-  const menuItems: { id: DesktopModule; label: string; icon: string; adminOnly?: boolean }[] = [
-    { id: 'dashboard', label: 'Visão Geral', icon: '📊' },
-    { id: 'receiving', label: 'Mesa de Recebimento', icon: '⚡' },
-    { id: 'batches', label: 'Lotes e Entregas', icon: '📋' },
-    { id: 'catalog', label: 'Catálogo & Rastreamento', icon: '🔍' },
-    { id: 'triage', label: 'Triagem e Destinação', icon: '🔬' },
-    { id: 'discrepancies', label: 'Divergências e Exceções', icon: '⚠️' },
-    { id: 'inventory_warehouse', label: 'Estoque & Transferências', icon: '🏢' },
-    { id: 'reports', label: 'Relatórios & Exportação', icon: '📄' },
-    { id: 'diagnostics', label: 'Diagnóstico de Leitor', icon: '🎯' },
-    { id: 'review', label: 'Revisão de OCR', icon: '📷', adminOnly: true },
-    { id: 'users', label: 'Usuários & Permissões', icon: '👥', adminOnly: true },
-    { id: 'onboarding', label: 'Onboarding & Ajuda', icon: '💡' },
+  const menuItems: { id: DesktopModule; label: string; icon: IconName; adminOnly?: boolean }[] = [
+    { id: 'dashboard', label: 'Visão geral', icon: 'home' },
+    { id: 'receiving', label: 'Mesa de recebimento', icon: 'scan' },
+    { id: 'batches', label: 'Lotes e entregas', icon: 'list' },
+    { id: 'catalog', label: 'Catálogo e rastreamento', icon: 'search' },
+    { id: 'triage', label: 'Triagem', icon: 'tools' },
+    { id: 'discrepancies', label: 'Divergências', icon: 'alert' },
+    { id: 'inventory_warehouse', label: 'Estoque e transferências', icon: 'building' },
+    { id: 'reports', label: 'Relatórios', icon: 'file' },
+    { id: 'diagnostics', label: 'Teste de leitor', icon: 'scan' },
+    { id: 'review', label: 'Revisão de OCR', icon: 'camera', adminOnly: true },
+    { id: 'users', label: 'Usuários e permissões', icon: 'users', adminOnly: true },
+    { id: 'onboarding', label: 'Configuração e ajuda', icon: 'help' },
   ]
 
   return (
-    <aside className="app-sidebar no-print">
+    <aside className="app-sidebar no-print" data-menu-open={menuOpen}>
       <div className="sidebar-brand">
         <div className="brand-logo-wrapper">
           <img src="/icons/new-life-logo.png" alt="New Life" className="brand-logo-img" />
         </div>
         <div className="brand-text-block">
           <span className="brand-title">New Life</span>
-          <span className="brand-subtitle">Cadeia de Custódia</span>
+          <span className="brand-subtitle">Controle de equipamentos</span>
         </div>
+        <button type="button" className="menu-toggle" aria-controls="warehouse-navigation"
+          aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>
+          <Icon name={menuOpen ? 'close' : 'menu'} /> Menu
+        </button>
       </div>
 
-      <nav className="sidebar-menu">
-        <div className="menu-group-label">Módulos Operacionais</div>
+      <nav id="warehouse-navigation" className="sidebar-menu" aria-label="Módulos do estoque">
         {menuItems.map((item) => {
           if (item.adminOnly && !isAdminOrSuper) return null
           const isActive = currentModule === item.id
@@ -71,9 +77,13 @@ export function Sidebar({ currentModule, onSelectModule, user, onLogout }: Sideb
             <button
               key={item.id}
               className={`sidebar-nav-item ${isActive ? 'active' : ''}`}
-              onClick={() => onSelectModule(item.id)}
+              aria-current={isActive ? 'page' : undefined}
+              onClick={() => {
+                setMenuOpen(false)
+                onSelectModule(item.id)
+              }}
             >
-              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-icon"><Icon name={item.icon} /></span>
               <span className="nav-label">{item.label}</span>
             </button>
           )

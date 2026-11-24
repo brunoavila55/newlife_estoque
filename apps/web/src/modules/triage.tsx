@@ -1,3 +1,4 @@
+import { Icon } from '../components/icon'
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type User } from '../db'
@@ -177,11 +178,7 @@ export function TriageModule({ user }: { user: User }) {
     <div className="module-container">
       <div className="section-head">
         <div>
-          <h2>Triagem e Destinação Pós-Recebimento (Cap. 11)</h2>
-          <p className="muted">
-            Inspeção técnica dos aparelhos devolvidos: integridade de carcaça, conectores, fonte, teste elétrico, reset
-            de fábrica (LGPD) e destinação para estoque ou manutenção.
-          </p>
+          <h1>Triagem de equipamentos</h1>
         </div>
         {(!triageItems || triageItems.length === 0) && (
           <button onClick={() => void seedSampleTriage()}>+ Carregar Amostras de Triagem</button>
@@ -297,8 +294,8 @@ export function TriageModule({ user }: { user: User }) {
                   <code>{selectedRecord.mac}</code>
                 </p>
               </div>
-              <button className="close-btn" onClick={() => setSelectedRecord(null)}>
-                ✕
+              <button className="close-btn" aria-label="Fechar" onClick={() => setSelectedRecord(null)}>
+                <Icon name="close" />
               </button>
             </div>
 
@@ -400,7 +397,7 @@ export function TriageModule({ user }: { user: User }) {
                       setChecklist({ ...checklist, outcome: out, destination: dest })
                     }}
                   >
-                    <option value="APPROVED">✓ Aprovado para Reuso</option>
+                    <option value="APPROVED">Aprovado para Reuso</option>
                     <option value="REJECTED">✗ Reprovado / Com Defeito</option>
                     <option value="INCONCLUSIVE">? Inconclusivo / Necessita Teste Avançado</option>
                     <option value="UNTESTED">Não Testado</option>

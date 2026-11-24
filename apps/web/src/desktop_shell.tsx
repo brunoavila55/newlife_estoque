@@ -76,6 +76,7 @@ export function DesktopShell({ user, denied, exit, connected }: DesktopShellProp
                 <TechDesk
                   profile={simulatedProfile}
                   deny={denied}
+                  connected={connected}
                   syncing={false}
                   run={async () => {}}
                   leaveDesk={exit}
@@ -85,7 +86,7 @@ export function DesktopShell({ user, denied, exit, connected }: DesktopShellProp
           ) : (
             <>
               {currentModule === 'dashboard' && (
-                <DashboardModule user={user} onNavigate={setCurrentModule} />
+                <DashboardModule onNavigate={setCurrentModule} />
               )}
 
               {currentModule === 'receiving' && (

@@ -1,3 +1,4 @@
+import { Icon } from '../components/icon'
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type User } from '../db'
@@ -143,24 +144,20 @@ export function CatalogModule({ user }: { user: User }) {
     <div className="module-container">
       <div className="section-head">
         <div>
-          <h2>Catálogo de Modelos & Rastreabilidade de Ativos (Cap. 06)</h2>
-          <p className="muted">
-            Consulta unificada do histórico de vida de qualquer roteador recolhido e cadastro dos modelos de
-            equipamentos homologados na New Life.
-          </p>
+          <h1>Catálogo e rastreamento</h1>
         </div>
         <div className="actions">
           <button
             className={activeTab === 'LOOKUP' ? 'primary' : ''}
             onClick={() => setActiveTab('LOOKUP')}
           >
-            🔍 Consulta Rastreável
+            Consulta Rastreável
           </button>
           <button
             className={activeTab === 'MODELS' ? 'primary' : ''}
             onClick={() => setActiveTab('MODELS')}
           >
-            📋 Catálogo Homologado ({models?.length || 0})
+            Catálogo Homologado ({models?.length || 0})
           </button>
         </div>
       </div>
@@ -299,8 +296,8 @@ export function CatalogModule({ user }: { user: User }) {
               <div className="modal-box card" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-head">
                   <h3>Cadastrar Modelo Homologado</h3>
-                  <button className="close-btn" onClick={() => setShowNewModelModal(false)}>
-                    ✕
+                  <button className="close-btn" aria-label="Fechar" onClick={() => setShowNewModelModal(false)}>
+                    <Icon name="close" />
                   </button>
                 </div>
                 <form onSubmit={(e) => void handleSaveNewModel(e)} className="model-form">

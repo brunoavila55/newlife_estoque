@@ -1,3 +1,4 @@
+import { Icon } from './icon'
 import { useState, useRef, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type User } from '../db'
@@ -59,11 +60,12 @@ export function Topbar({
     <header className="topbar-desktop no-print">
       <div className="topbar-search-area">
         <form onSubmit={handleSearchSubmit} className="global-search-form">
-          <span className="search-icon">🔍</span>
+          <Icon name="search" />
           <input
             ref={searchInputRef}
             type="search"
-            placeholder="Busca global de equipamentos, seriais, MACs ou lotes… (Ctrl+K)"
+            aria-label="Buscar por serial, MAC ou lote"
+            placeholder="Buscar por serial, MAC ou lote"
             value={searchVal}
             onChange={(e) => setSearchVal(e.target.value)}
             className="global-search-input"
@@ -80,17 +82,18 @@ export function Topbar({
             onClick={onToggleMobilePreview}
             title="Alternar entre visual Desktop e Mobile do Técnico"
           >
-            {isMobilePreview ? '💻 Visão Desktop' : '📱 Visão Mobile PWA'}
+            {isMobilePreview ? 'Voltar ao estoque' : 'Prévia do técnico'}
           </button>
         )}
 
         {/* Seletor de Depósito */}
         <div className="warehouse-selector-box">
-          <span className="warehouse-icon">🏢</span>
+          <Icon name="building" />
           <select
             value={activeWarehouse}
             onChange={(e) => setActiveWarehouse(e.target.value)}
             className="warehouse-select"
+            aria-label="Depósito"
           >
             {locations && locations.length > 0 ? (
               locations.map((loc) => (
@@ -115,9 +118,10 @@ export function Topbar({
           <button
             className="notif-bell-btn"
             onClick={() => setShowNotifMenu(!showNotifMenu)}
-            title="Notificações Operacionais"
+            aria-label="Notificações"
+            aria-expanded={showNotifMenu}
           >
-            🔔
+            <Icon name="bell" />
             {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}
           </button>
 

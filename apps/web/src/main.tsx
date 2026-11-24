@@ -52,7 +52,6 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
           <img src="/icons/new-life-logo.png" alt="New Life" width="560" height="313" />
         </div>
         <p>Controle de recolhimento e devolução</p>
-        <div className="login-scene" aria-hidden="true" />
       </div>
       <div className="login-panel">
         <h1>{reauthenticate ? 'Entre novamente' : 'Entrar no New Life'}</h1>
@@ -267,7 +266,7 @@ function App() {
     return (
       <>
         {updateNotice}
-        <main style={{ padding: '2rem 1rem' }}>
+        <main className="login-page">
           <Login
             reauthenticate={!!profile}
             done={(user) => {
@@ -298,6 +297,7 @@ function App() {
       <TechDesk
         profile={profile}
         deny={deny}
+        connected={connected}
         syncing={syncing}
         run={run}
         leaveDesk={leaveDesk}

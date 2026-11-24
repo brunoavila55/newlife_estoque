@@ -20,11 +20,7 @@ export function OnboardingModule() {
     <div className="module-container">
       <div className="section-head">
         <div>
-          <h2>Checklist de Onboarding e Central de Ajuda (Cap. 21)</h2>
-          <p className="muted">
-            Guia passo a passo para implantação da cadeia de custódia digital na operação da New Life e instruções de
-            configuração de hardware.
-          </p>
+          <h1>Configuração e ajuda</h1>
         </div>
       </div>
 

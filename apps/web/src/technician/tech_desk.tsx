@@ -1,3 +1,5 @@
+import { batchStatusLabels, type Batch } from '../types'
+import { Icon } from '../components/icon'
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, storePhoto, freeSpace, type Capture, type Profile, type User } from '../db'
@@ -7,17 +9,25 @@ import type { BarcodeEvidence } from '../db'
 import { QRCodeSVG } from '../components/qrcode'
 import { playSound } from '../audio'
 
+const queueLabels: Record<Capture['state'], string> = {
+  LOCAL_PENDING: 'Aguardando envio',
+  UPLOADING: 'Enviando',
+  ACTION_REQUIRED: 'Ação necessária',
+  UPLOADED: 'Enviada',
+}
+
 const dateTime = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
 
 interface TechDeskProps {
   profile: Profile
   deny: () => void
+  connected: boolean
   syncing: boolean
   run: (force: boolean) => Promise<void>
   leaveDesk: () => Promise<void>
 }
 
-export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskProps) {
+export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: TechDeskProps) {
   const [navTab, setNavTab] = useState<'HOME' | 'CAPTURE' | 'CARTEIRA' | 'LOTES' | 'QUEUE'>('HOME')
 
   const [notice, setNotice] = useState('')
@@ -25,7 +35,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
   const [saving, setSaving] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [lowSpace, setLowSpace] = useState(false)
-  const [usedStorageMB, setUsedStorageMB] = useState<string>('0')
+  const [usedStorageMB, setUsedStorageMB] = useState<string>()
 
   // Capture & Complementary form state
   const [barcode, setBarcode] = useState('')
@@ -48,7 +58,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
   const [selectedForBatch, setSelectedForBatch] = useState<string[]>([])
   const [batchNotes, setBatchNotes] = useState('')
   const [showCreateBatchModal, setShowCreateBatchModal] = useState(false)
-  const [activeBatchModal, setActiveBatchModal] = useState<any>(null)
+  const [activeBatchModal, setActiveBatchModal] = useState<Batch | null>(null)
 
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const pickerInputRef = useRef<HTMLInputElement>(null)
@@ -69,7 +79,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
   const checkSpace = useCallback(async () => {
     try {
       const estimate = await navigator.storage?.estimate()
-      if (estimate?.usage) {
+      if (estimate?.usage !== undefined) {
         setUsedStorageMB((estimate.usage / (1024 * 1024)).toFixed(1))
       }
       const free = await freeSpace()
@@ -215,24 +225,15 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
 
   return (
     <div className="mobile-app-shell">
-      {/* 1. Barra de status móvel nativa */}
       <header className="mobile-system-header">
-        <div className="mobile-status-bar">
-          <span className="mobile-clock">{new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
-          <div className="mobile-status-indicators">
-            <span className={`network-pill ${navigator.onLine ? 'online' : 'offline'}`}>
-              <span className="dot" /> {navigator.onLine ? '4G Online' : 'Sem Sinal'}
-            </span>
-            <span className="battery-icon">🔋 98%</span>
-          </div>
-        </div>
-
         <div className="mobile-app-bar">
           <div className="user-tech-badge">
-            <div className="tech-avatar">{profile.name.charAt(0).toUpperCase()}</div>
+            <img className="tech-avatar" src="/icons/new-life-logo.png" alt="New Life" />
             <div className="tech-meta">
               <strong className="tech-name">{profile.name}</strong>
-              <span className="tech-role-tag">Técnico em Campo · New Life</span>
+              <span className="tech-role-tag"><span className={`network-pill ${connected ? 'online' : 'offline'}`}>
+                <span className="dot" /> {connected ? 'Conectado' : 'Sem conexão'}
+              </span></span>
             </div>
           </div>
 
@@ -240,9 +241,9 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
             type="button"
             className="mobile-exit-btn"
             onClick={() => (pendingCount > 0 ? setConfirmLeave(true) : void leaveDesk())}
-            title={navigator.onLine ? 'Sair' : 'Bloquear'}
+            title={connected ? 'Sair' : 'Bloquear'}
           >
-            {navigator.onLine ? 'Sair' : 'Bloquear'}
+            {connected ? 'Sair' : 'Bloquear'}
           </button>
         </div>
       </header>
@@ -260,11 +261,11 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
         </section>
       )}
 
-      {notice && <div className="mobile-toast alert">{notice}</div>}
-      {success && <div className="mobile-toast success">{success}</div>}
+      {notice && <div className="mobile-toast alert" role="alert">{notice}</div>}
+      {success && <div className="mobile-toast success" role="status">{success}</div>}
       {lowSpace && (
-        <div className="mobile-toast alert">
-          ⚠️ Pouco espaço disponível no celular. Sincronize suas fotos pendentes.
+        <div className="mobile-toast alert" role="alert">
+          Pouco espaço. Sincronize suas fotos pendentes.
         </div>
       )}
 
@@ -273,87 +274,30 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
         {/* ABA 1: INÍCIO */}
         {navTab === 'HOME' && (
           <div className="mobile-tab-view home-view">
-            {/* Hero Card Glassmorphic */}
-            <div className="mobile-hero-card">
-              <div className="hero-top-row">
-                <span className="hero-subtitle">Sob Sua Custódia</span>
-                <span className="retention-pill success">✓ 4 dias retido</span>
-              </div>
-              <div className="hero-counter-wrap">
-                <h1 className="hero-main-counter">{identifiedCount + pendingCount}</h1>
-                <span className="hero-counter-unit">roteadores em campo</span>
-              </div>
-
-              <div className="hero-sync-status">
-                {pendingCount > 0 ? (
-                  <span className="sync-tag pending">⚡ {pendingCount} fotos aguardando sincronização</span>
-                ) : (
-                  <span className="sync-tag synced">✓ Todas as coletas sincronizadas</span>
-                )}
-              </div>
-
-              <button
-                type="button"
-                className="mobile-hero-cta"
-                onClick={() => setNavTab('CAPTURE')}
-              >
-                <span className="cta-icon">📸</span>
-                <span>Fotografar Novo Roteador</span>
+            <h1>Recolhimentos</h1>
+            <section className="mobile-hero-card">
+              <Icon name="scan" />
+              <h2>Nova coleta</h2>
+              <p>Salve a foto da etiqueta mesmo sem conexão.</p>
+              <button type="button" className="mobile-hero-cta" onClick={() => setNavTab('CAPTURE')}>
+                <Icon name="camera" /> Fotografar etiqueta
               </button>
-            </div>
+            </section>
 
-            {/* Widget Grid de Acesso Rápido */}
-            <div className="mobile-widget-grid">
-              <div className="mobile-widget-card" onClick={() => setNavTab('CARTEIRA')}>
-                <div className="widget-icon-box blue">💼</div>
-                <strong className="widget-value">{identifiedCount}</strong>
-                <span className="widget-title">Minha Carteira</span>
+            <section className="mobile-overview">
+              <h2>Acompanhamento</h2>
+              <div className="mobile-widget-grid">
+                <button type="button" className="mobile-widget-card" onClick={() => setNavTab('CARTEIRA')}>
+                  <Icon name="box" /><span>Coletas identificadas</span><strong>{identifiedCount}</strong>
+                </button>
+                <button type="button" className="mobile-widget-card" onClick={() => setNavTab('LOTES')}>
+                  <Icon name="list" /><span>Lotes de devolução</span><strong>{batches?.length ?? 0}</strong>
+                </button>
+                <button type="button" className="mobile-widget-card" onClick={() => setNavTab('QUEUE')}>
+                  <Icon name="sync" /><span>Fotos a enviar</span><strong>{pendingCount}</strong>
+                </button>
               </div>
-
-              <div className="mobile-widget-card" onClick={() => setNavTab('LOTES')}>
-                <div className="widget-icon-box teal">📋</div>
-                <strong className="widget-value">{batches?.length || 0}</strong>
-                <span className="widget-title">Lotes Gerados</span>
-              </div>
-
-              <div className="mobile-widget-card" onClick={() => setNavTab('QUEUE')}>
-                <div className="widget-icon-box orange">🔄</div>
-                <strong className="widget-value">{pendingCount}</strong>
-                <span className="widget-title">Fila Offline</span>
-              </div>
-            </div>
-
-            {/* Banner de Produtividade */}
-            <div className="mobile-card info-card">
-              <div className="card-header-icon">
-                <span className="icon">💡</span>
-                <strong>Agilidade na Casa do Cliente</strong>
-              </div>
-              <p className="small-text muted">
-                Ao recolher mais de um aparelho no mesmo assinante, ative o <strong>"Modo Próximo"</strong> na tela de revisão para manter a Ordem de Serviço (OS) preenchida.
-              </p>
-            </div>
-
-            {/* Resumo de Lotes Recentes */}
-            {batches && batches.length > 0 && (
-              <div className="mobile-section-block">
-                <div className="section-title-row">
-                  <h3>Últimos Lotes Apresentados</h3>
-                  <button className="link-btn" onClick={() => setNavTab('LOTES')}>Ver Todos</button>
-                </div>
-                <div className="recent-batches-list">
-                  {batches.slice(0, 2).map((b) => (
-                    <div key={b.id} className="mobile-card batch-row-card" onClick={() => { setActiveBatchModal(b); setNavTab('LOTES') }}>
-                      <div className="batch-row-left">
-                        <strong>{b.code}</strong>
-                        <span className="muted small-text">{b.total_items} equipamento(s)</span>
-                      </div>
-                      <span className="badge badge-info">{b.status}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            </section>
           </div>
         )}
 
@@ -362,20 +306,10 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
           <div className="mobile-tab-view capture-view">
             {!previewBlobUrl ? (
               <div className="mobile-capture-hero card">
-                <div className="viewfinder-icon-illustration">
-                  <div className="scanner-frame-art">
-                    <span className="bracket tl" />
-                    <span className="bracket tr" />
-                    <span className="bracket bl" />
-                    <span className="bracket br" />
-                    <span className="laser-art" />
-                    <span className="barcode-bars-art">||| | ||| || |</span>
-                  </div>
-                </div>
-
-                <h2>Fotografar Etiqueta</h2>
+                <div className="capture-symbol"><Icon name="scan" /></div>
+                <h1>Fotografar etiqueta</h1>
                 <p className="muted text-center">
-                  Posicione a etiqueta do roteador com boa iluminação. O leitor decodificará os códigos em tempo real.
+                  Enquadre a etiqueta inteira e confira se o serial e o MAC estão legíveis.
                 </p>
 
                 {liveCamera ? (
@@ -384,6 +318,10 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                     fallback={() => {
                       setLiveCamera(false)
                       cameraInputRef.current?.click()
+                    }}
+                    pickFromGallery={() => {
+                      setLiveCamera(false)
+                      pickerInputRef.current?.click()
                     }}
                     save={async (file, evidence) => {
                       await handlePhotoSelected(file, evidence)
@@ -401,7 +339,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                           : cameraInputRef.current?.click()
                       }
                     >
-                      <span className="btn-icon">📷</span> Abrir Câmera Traseira
+                      <span className="btn-icon"><Icon name="camera" /></span> Abrir câmera traseira
                     </button>
 
                     <button
@@ -409,7 +347,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                       className="secondary mobile-big-btn"
                       onClick={() => pickerInputRef.current?.click()}
                     >
-                      <span className="btn-icon">🖼️</span> Escolher da Galeria
+                      <span className="btn-icon"><Icon name="image" /></span> Escolher da galeria
                     </button>
                   </div>
                 )}
@@ -456,7 +394,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
 
                 <div className="captured-photo-thumb-wrap">
                   <img src={previewBlobUrl} alt="Etiqueta Capturada" className="captured-photo-img" />
-                  <span className="photo-tag">✓ Foto Gravada</span>
+                  <span className="photo-tag">Foto Gravada</span>
                 </div>
 
                 <form onSubmit={(e) => { e.preventDefault(); void handleSaveCapture() }} className="mobile-form-body">
@@ -529,14 +467,14 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                         className={`seg-btn ${condition === 'GOOD' ? 'active' : ''}`}
                         onClick={() => setCondition('GOOD')}
                       >
-                        ✓ Bom Estado
+                        Bom Estado
                       </button>
                       <button
                         type="button"
                         className={`seg-btn ${condition === 'DAMAGED' ? 'active' : ''}`}
                         onClick={() => setCondition('DAMAGED')}
                       >
-                        ⚠️ Avariado / Riscado
+                        Avariado / Riscado
                       </button>
                     </div>
                   </div>
@@ -599,7 +537,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                   {/* Switch para Modo Registrar Próximo */}
                   <div className="toggle-row-card next-mode-glow">
                     <div>
-                      <strong className="text-teal">⚡ Modo Registrar Próximo</strong>
+                      <strong className="text-teal">Modo Registrar Próximo</strong>
                       <small className="muted display-block">Mantém a mesma OS e modelo para o próximo bipe</small>
                     </div>
                     <label className="switch">
@@ -618,7 +556,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                       className="primary mobile-big-btn full-width"
                       disabled={saving}
                     >
-                      {saving ? 'Gravando no Celular…' : '💾 Salvar no Dispositivo'}
+                      {saving ? 'Gravando no Celular…' : 'Salvar no Dispositivo'}
                     </button>
                   </div>
                 </form>
@@ -630,6 +568,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
         {/* ABA 3: MINHA CARTEIRA */}
         {navTab === 'CARTEIRA' && (
           <div className="mobile-tab-view carteira-view">
+            <h1>Carteira</h1>
             <div className="carteira-top-bar">
               <input
                 type="search"
@@ -663,12 +602,12 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                     >
                       <div className="card-checkbox">
                         <div className={`checkbox-circle ${isSelected ? 'checked' : ''}`}>
-                          {isSelected && '✓'}
+                          {isSelected && <Icon name="check" />}
                         </div>
                       </div>
 
                       <div className="equipment-icon-col">
-                        <div className="device-avatar">📡</div>
+                        <div className="device-avatar"><Icon name="box" /></div>
                       </div>
 
                       <div className="equipment-info-col">
@@ -694,7 +633,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
               </div>
             ) : (
               <div className="mobile-empty-state card">
-                <span className="empty-icon">📦</span>
+                <span className="empty-icon"><Icon name="box" /></span>
                 <h3>Carteira Vazia</h3>
                 <p className="muted">Nenhum equipamento aguardando devolução neste momento.</p>
               </div>
@@ -712,7 +651,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                   className="primary floating-cta-btn"
                   onClick={() => setShowCreateBatchModal(true)}
                 >
-                  Gerar Lote de Devolução →
+                  Gerar lote de devolução
                 </button>
               </div>
             )}
@@ -723,7 +662,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                 <div className="modal-box card" onClick={(e) => e.stopPropagation()}>
                   <div className="modal-head">
                     <h3>Criar Lote com {selectedForBatch.length} Itens</h3>
-                    <button className="close-btn" onClick={() => setShowCreateBatchModal(false)}>✕</button>
+                    <button className="close-btn" aria-label="Fechar" onClick={() => setShowCreateBatchModal(false)}><Icon name="close" /></button>
                   </div>
 
                   <p className="muted small-text">
@@ -761,7 +700,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
         {navTab === 'LOTES' && (
           <div className="mobile-tab-view lotes-view">
             <div className="section-header-compact">
-              <h2>Meus Lotes de Entrega</h2>
+              <h1>Lotes de devolução</h1>
               <p className="muted small-text">Toque no lote para abrir o QR Code para o conferente.</p>
             </div>
 
@@ -781,7 +720,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                           <span className="batch-date-text">{dateTime.format(new Date(batch.created_at))}</span>
                         </div>
                         <span className={`badge status-${batch.status.toLowerCase()}`}>
-                          {batch.status === 'PRESENTED' ? 'Apresentado' : batch.status === 'COMPLETED' ? 'Concluído' : batch.status}
+                          {batchStatusLabels[batch.status]}
                         </span>
                       </div>
 
@@ -795,8 +734,8 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                       </div>
 
                       <div className="batch-card-footer">
-                        <span className="tap-qr-hint">📲 Toque para ver QR Code</span>
-                        <span className="arrow-right">→</span>
+                        <span className="tap-qr-hint">Ver código QR</span>
+                        <span className="arrow-right"><Icon name="next" /></span>
                       </div>
                     </div>
                   )
@@ -804,7 +743,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
               </div>
             ) : (
               <div className="mobile-empty-state card">
-                <span className="empty-icon">📋</span>
+                <span className="empty-icon"><Icon name="list" /></span>
                 <h3>Nenhum Lote Criado</h3>
                 <p className="muted">Selecione os roteadores na Carteira e gere um lote de devolução.</p>
               </div>
@@ -817,9 +756,9 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                   <div className="modal-head">
                     <div>
                       <h3>{activeBatchModal.code}</h3>
-                      <span className="badge badge-info">{activeBatchModal.status}</span>
+                      <span className="badge badge-info">{batchStatusLabels[activeBatchModal.status]}</span>
                     </div>
-                    <button className="close-btn" onClick={() => setActiveBatchModal(null)}>✕</button>
+                    <button className="close-btn" aria-label="Fechar" onClick={() => setActiveBatchModal(null)}><Icon name="close" /></button>
                   </div>
 
                   <div className="qr-display-box">
@@ -856,11 +795,12 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
         {/* ABA 5: FILA OFFLINE */}
         {navTab === 'QUEUE' && (
           <div className="mobile-tab-view queue-view">
+            <h1>Fila de envio</h1>
             <div className="offline-storage-meter card">
               <div className="meter-top-row">
                 <div>
                   <strong>Armazenamento Local</strong>
-                  <p className="muted small-text">{usedStorageMB} MB utilizados de 320 MB</p>
+                  {usedStorageMB && <p className="muted small-text">{usedStorageMB} MB usados no dispositivo</p>}
                 </div>
                 <span className="meter-pill">{pendingCount} fotos pendentes</span>
               </div>
@@ -871,10 +811,13 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                 disabled={syncing}
                 onClick={() => void run(true)}
               >
-                {syncing ? '🔄 Enviando Fotos ao Servidor…' : '⚡ Sincronizar Agora'}
+                {syncing ? 'Enviando fotos…' : 'Sincronizar agora'}
               </button>
             </div>
 
+            {pendingCount > 0 && <p className="muted small-text">
+              Mantenha o aplicativo aberto para enviar as fotos. Limpar os dados do site pode apagar fotos pendentes.
+            </p>}
             <div className="queue-list-section">
               <h3>Fotos no Celular ({captures?.length || 0})</h3>
               {captures && captures.length > 0 ? (
@@ -883,12 +826,13 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                     <div key={c.id} className="queue-item-card card">
                       <div className="queue-item-main">
                         <strong className={`badge ${c.state === 'UPLOADED' ? 'badge-success' : 'badge-warning'}`}>
-                          {c.state === 'UPLOADED' ? '✓ Enviada' : '⏳ Salva Offline'}
+                          {queueLabels[c.state]}
                         </strong>
                         <span className="mono queue-serial">
-                          {c.barcode?.raw_value || 'Serial em OCR'}
+                          {c.barcode?.raw_value || 'Sem código informado'}
                         </span>
                         <small className="muted">{dateTime.format(new Date(c.capturedAt))}</small>
+                        {c.error && c.state !== 'UPLOADED' && <small className="muted">{c.error}</small>}
                       </div>
                     </div>
                   ))}
@@ -904,51 +848,56 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
       </div>
 
       {/* 3. Floating Bottom Navigation Bar Estilizada */}
-      <nav className="mobile-bottom-dock">
+      <nav className="mobile-bottom-dock" aria-label="Área do técnico">
         <button
           type="button"
           className={`dock-btn ${navTab === 'HOME' ? 'active' : ''}`}
+          aria-current={navTab === 'HOME' ? 'page' : undefined}
           onClick={() => setNavTab('HOME')}
         >
-          <span className="dock-icon">🏠</span>
+          <span className="dock-icon"><Icon name="home" /></span>
           <span className="dock-label">Início</span>
         </button>
 
         <button
           type="button"
           className={`dock-btn ${navTab === 'CAPTURE' ? 'active' : ''}`}
+          aria-current={navTab === 'CAPTURE' ? 'page' : undefined}
           onClick={() => setNavTab('CAPTURE')}
         >
-          <span className="dock-icon">📸</span>
+          <span className="dock-icon"><Icon name="camera" /></span>
           <span className="dock-label">Registrar</span>
         </button>
 
         <button
           type="button"
           className={`dock-btn ${navTab === 'CARTEIRA' ? 'active' : ''}`}
+          aria-current={navTab === 'CARTEIRA' ? 'page' : undefined}
           onClick={() => setNavTab('CARTEIRA')}
         >
-          <span className="dock-icon">💼</span>
+          <span className="dock-icon"><Icon name="box" /></span>
           <span className="dock-label">Carteira</span>
         </button>
 
         <button
           type="button"
           className={`dock-btn ${navTab === 'LOTES' ? 'active' : ''}`}
+          aria-current={navTab === 'LOTES' ? 'page' : undefined}
           onClick={() => setNavTab('LOTES')}
         >
-          <span className="dock-icon">📋</span>
+          <span className="dock-icon"><Icon name="list" /></span>
           <span className="dock-label">Lotes</span>
         </button>
 
         <button
           type="button"
           className={`dock-btn ${navTab === 'QUEUE' ? 'active' : ''}`}
+          aria-current={navTab === 'QUEUE' ? 'page' : undefined}
           onClick={() => setNavTab('QUEUE')}
         >
           <span className="dock-icon relative">
-            🔄
-            {pendingCount > 0 && <span className="dock-badge">{pendingCount}</span>}
+            <Icon name="sync" />
+            {pendingCount > 0 && <span className="dock-badge" aria-hidden="true">{pendingCount}</span>}
           </span>
           <span className="dock-label">Fila</span>
         </button>

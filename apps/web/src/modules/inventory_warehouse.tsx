@@ -84,30 +84,26 @@ export function InventoryWarehouseModule({ user }: { user: User }) {
     <div className="module-container">
       <div className="section-head">
         <div>
-          <h2>Estoque, Endereçamento e Transferências (Cap. 11)</h2>
-          <p className="muted">
-            Endereçamento físico (Depósito → Área → Prateleira), contagem de inventário assistida por bip e remessas de
-            transferência entre unidades em trânsito.
-          </p>
+          <h1>Estoque e transferências</h1>
         </div>
         <div className="actions">
           <button
             className={activeTab === 'LOCATIONS' ? 'primary' : ''}
             onClick={() => setActiveTab('LOCATIONS')}
           >
-            🏢 Depósitos e Áreas
+            Depósitos e Áreas
           </button>
           <button
             className={activeTab === 'INVENTORY' ? 'primary' : ''}
             onClick={() => setActiveTab('INVENTORY')}
           >
-            📦 Contagem de Inventário
+            Contagem de Inventário
           </button>
           <button
             className={activeTab === 'TRANSFERS' ? 'primary' : ''}
             onClick={() => setActiveTab('TRANSFERS')}
           >
-            🚚 Remessas e Transferências ({transfers.length})
+            Remessas e Transferências ({transfers.length})
           </button>
         </div>
       </div>
@@ -129,7 +125,7 @@ export function InventoryWarehouseModule({ user }: { user: User }) {
                 <div className="chip-group">
                   {loc.areas.map((area, idx) => (
                     <span key={idx} className="chip">
-                      📍 {area}
+                      {area}
                     </span>
                   ))}
                 </div>
@@ -205,7 +201,7 @@ export function InventoryWarehouseModule({ user }: { user: User }) {
                       <li key={idx} className="item-row-compact">
                         <span>#{scannedItems.length - idx}</span>
                         <code className="mono">{code}</code>
-                        <span className="badge badge-success">✓ Registrado</span>
+                        <span className="badge badge-success">Registrado</span>
                       </li>
                     ))}
                   </ul>
@@ -244,7 +240,7 @@ export function InventoryWarehouseModule({ user }: { user: User }) {
                     <td>{t.items.length} equipamento(s)</td>
                     <td>
                       <span className={`badge ${t.status === 'IN_TRANSIT' ? 'badge-warning' : 'badge-success'}`}>
-                        {t.status === 'IN_TRANSIT' ? '🚚 Em Trânsito' : 'Recebido'}
+                        {t.status === 'IN_TRANSIT' ? 'Em Trânsito' : 'Recebido'}
                       </span>
                     </td>
                     <td>{dateTime.format(new Date(t.created_at))}</td>

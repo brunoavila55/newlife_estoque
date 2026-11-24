@@ -85,18 +85,14 @@ export function ReportsModule({ user }: { user: User }) {
     <div className="module-container">
       <div className="section-head no-print">
         <div>
-          <h2>Relatórios e Exportação Gerencial (Cap. 15)</h2>
-          <p className="muted">
-            Relatórios auditáveis de custódia, entregas por lote, triagem, divergências e Kardex de movimentações.
-            Exportação protegida contra perda de zeros e injeção de fórmulas CSV.
-          </p>
+          <h1>Relatórios</h1>
         </div>
         <div className="actions">
           <button className="primary" onClick={exportCSV}>
-            📥 Exportar para CSV / Excel
+            Exportar para CSV / Excel
           </button>
           <button onClick={() => window.print()}>
-            🖨️ Imprimir Relatório
+            Imprimir Relatório
           </button>
         </div>
       </div>
@@ -176,7 +172,7 @@ export function ReportsModule({ user }: { user: User }) {
                 <td>14 equipamentos</td>
                 <td>9 dias</td>
                 <td><strong>5 itens</strong></td>
-                <td><span className="badge badge-danger">⚠️ Notificação de Devolução</span></td>
+                <td><span className="badge badge-danger">Notificação de Devolução</span></td>
               </tr>
               <tr>
                 <td><strong>Marcos Souza</strong></td>

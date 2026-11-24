@@ -1,3 +1,4 @@
+import { Icon } from './components/icon'
 import { useEffect, useRef, useState } from 'react'
 import type { BarcodeEvidence } from './db'
 import { readFrame } from './photo'
@@ -18,10 +19,12 @@ export function LabelCamera({
   save,
   close,
   fallback,
+  pickFromGallery,
 }: {
   save: (file: File, evidence?: BarcodeEvidence) => Promise<boolean>
   close: () => void
   fallback: () => void
+  pickFromGallery: () => void
 }) {
   const video = useRef<HTMLVideoElement>(null)
   const [ready, setReady] = useState(false)
@@ -160,13 +163,13 @@ export function LabelCamera({
           onClick={close}
           title="Fechar Câmera"
         >
-          ✕
+          <Icon name="close" />
         </button>
 
         <div className="vf-status-chip">
           {code ? (
             <span className="code-detected">
-              ⚡ Código: <strong>{code}</strong>
+              Código: <strong>{code}</strong>
             </span>
           ) : (
             <span>Posicione a etiqueta no quadro</span>
@@ -178,9 +181,10 @@ export function LabelCamera({
             type="button"
             className={`vf-icon-btn ${torchOn ? 'active' : ''}`}
             onClick={() => void toggleTorch()}
-            title={torchOn ? 'Desligar Lanterna' : 'Ligar Lanterna'}
+            aria-label={torchOn ? 'Desligar lanterna' : 'Ligar lanterna'}
+            aria-pressed={torchOn}
           >
-            {torchOn ? '🔦 ON' : '🔦'}
+            <Icon name="torch" />
           </button>
         )}
       </div>
@@ -208,7 +212,6 @@ export function LabelCamera({
               <span className="corner top-right" />
               <span className="corner bottom-left" />
               <span className="corner bottom-right" />
-              <div className="laser-scan-line" />
             </div>
           </div>
         )}
@@ -230,7 +233,7 @@ export function LabelCamera({
                 setShot(undefined)
               }}
             >
-              🔄 Fotografar de Novo
+              Fotografar de novo
             </button>
             <button
               type="button"
@@ -245,7 +248,7 @@ export function LabelCamera({
                 }
               }}
             >
-              ✓ Usar Esta Foto
+              Usar esta foto
             </button>
           </div>
         ) : (
@@ -253,10 +256,10 @@ export function LabelCamera({
             <button
               type="button"
               className="vf-gallery-thumb-btn"
-              onClick={fallback}
-              title="Escolher arquivo da galeria"
+              onClick={pickFromGallery}
+              aria-label="Escolher da galeria"
             >
-              🖼️
+              <Icon name="image" />
             </button>
 
             {/* Shutter Circular estilo Câmera Nativa */}
@@ -274,9 +277,9 @@ export function LabelCamera({
               type="button"
               className="vf-text-btn"
               onClick={fallback}
-              title="Digitação manual"
+              title="Usar câmera do celular"
             >
-              ⌨️ Digitar
+              Usar câmera do celular
             </button>
           </div>
         )}
