@@ -1,0 +1,1 @@
+DROP INDEX custody_technician_deliveries_idx;

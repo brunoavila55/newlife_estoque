@@ -69,6 +69,11 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
 
   useEffect(() => { void load() }, [load])
 
+  if (selected) {
+    return <TechnicianProfile key={selected.id} owner={owner} denied={denied}
+      technician={selected} back={() => setSelected(undefined)} />
+  }
+
   return (
     <section className="card work-list">
       <div className="section-head"><h2>Usuários cadastrados</h2>
@@ -83,18 +88,30 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
             <div><strong>{user.name}</strong><br />
               <span className="muted">{user.login} · {roleLabels[user.role ?? 'technician']} · {user.active ? 'Ativo' : 'Desativado'}</span>
             </div>
-            {user.role === 'technician' && <button aria-expanded={selected?.id === user.id} onClick={() => setSelected(selected?.id === user.id ? undefined : user)}>
-              {selected?.id === user.id ? 'Fechar estoque' : 'Ver estoque'}
-            </button>}
+            {user.role === 'technician' && <button onClick={() => setSelected(user)}>Abrir técnico</button>}
           </div>
-          {selected?.id === user.id && <div className="user-inventory">
-            <InventoryPanel key={user.id} owner={owner} denied={denied} technician={user} />
-          </div>}
         </li>
       )}</ul>}
       {page?.next_cursor && <button disabled={loading} onClick={() => void load(page.next_cursor!)}>Carregar mais usuários</button>}
     </section>
   )
+}
+
+function TechnicianProfile({ technician, owner, denied, back }: {
+  technician: User; owner: string; denied: () => void; back: () => void
+}) {
+  const [tab, setTab] = useState<'inventory' | 'deliveries'>('inventory')
+  return <section className="module-container">
+    <div className="section-head">
+      <div><h2>{technician.name}</h2><p className="muted">{technician.login}</p></div>
+      <button onClick={back}>Voltar aos usuários</button>
+    </div>
+    <nav aria-label="Perfil do técnico" className="tabs">
+      <button aria-current={tab === 'inventory' ? 'page' : undefined} onClick={() => setTab('inventory')}>Em posse</button>
+      <button aria-current={tab === 'deliveries' ? 'page' : undefined} onClick={() => setTab('deliveries')}>Já entregues</button>
+    </nav>
+    <InventoryPanel key={tab} owner={owner} denied={denied} technician={technician} deliveries={tab === 'deliveries'} />
+  </section>
 }
 
 function UserRegistration({ owner, denied }: { owner: string; denied: () => void }) {

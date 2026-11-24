@@ -1292,6 +1292,17 @@ async fn receipt_scopes_scans_and_transfers_custody_once_under_concurrency(db: P
         3
     );
 
+    let deliveries = format!("/api/v1/admin/users/{owner}/deliveries");
+    let pending_delivery = call(&app, "GET", &deliveries, Some(access(&admin)), Value::Null).await;
+    assert_eq!(pending_delivery.0, StatusCode::OK);
+    assert_eq!(pending_delivery.1["items"], json!([]));
+    assert_eq!(
+        call(&app, "GET", &deliveries, Some(access(&actor)), Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+
     let left_confirm = format!("{first}/confirm");
     let right_confirm = format!("{second}/confirm");
     let left_input = json!({"equipment_id":equipment,"scan_id":left_scan_id,"inspection":{"power_supply":"ORIGINAL","cables_present":true,"condition":"GOOD"}});
@@ -1374,6 +1385,24 @@ async fn receipt_scopes_scans_and_transfers_custody_once_under_concurrency(db: P
     .await;
     assert_eq!(history.0, StatusCode::OK);
     assert_eq!(history.1["history"][0]["type"], "WAREHOUSE_RECEIVED");
+    let delivered = call(&app, "GET", &deliveries, Some(access(&admin)), Value::Null).await;
+    assert_eq!(delivered.0, StatusCode::OK, "{}", delivered.1);
+    let items = delivered.1["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["warehouse_name"], "Depósito piloto");
+    assert!(items[0]["delivered_at"].is_string());
+    assert!(items[0]["identifiers"].as_array().unwrap().iter().any(|identifier|
+        identifier["kind"] == "SERIAL" && identifier["raw_value"] == "0001-O"));
+    let other_deliveries = call(
+        &app,
+        "GET",
+        &format!("/api/v1/admin/users/{other}/deliveries"),
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(other_deliveries.0, StatusCode::OK);
+    assert_eq!(other_deliveries.1["items"], json!([]));
     let inventory = call(
         &app,
         "GET",

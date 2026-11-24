@@ -8,6 +8,7 @@ import { LabelCamera } from '../label-camera'
 import type { BarcodeEvidence } from '../db'
 import { QRCodeSVG } from '../components/qrcode'
 import { playSound } from '../audio'
+import { InventoryPanel } from '../inventory'
 
 const remoteQueueLabels: Record<string, string> = {
   OCR_PENDING: 'Recebida, aguardando processamento',
@@ -36,7 +37,7 @@ interface TechDeskProps {
 }
 
 export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: TechDeskProps) {
-  const [navTab, setNavTab] = useState<'HOME' | 'CAPTURE' | 'CARTEIRA' | 'LOTES' | 'QUEUE'>('HOME')
+  const [navTab, setNavTab] = useState<'HOME' | 'CAPTURE' | 'INVENTORY' | 'CARTEIRA' | 'LOTES' | 'QUEUE'>('HOME')
 
   const [notice, setNotice] = useState('')
   const [success, setSuccess] = useState('')
@@ -275,7 +276,6 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
         </div>
       )}
 
-      {/* 2. Conteúdo Principal das 5 Abas */}
       <div className="mobile-scrollable-body">
         {/* ABA 1: INÍCIO */}
         {navTab === 'HOME' && (
@@ -804,6 +804,19 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
           </div>
         )}
 
+        {navTab === 'INVENTORY' && (
+          <main className="mobile-tab-view">
+            {connected ? (
+              <InventoryPanel key={profile.id} owner={profile.id} denied={deny} />
+            ) : (
+              <section className="card">
+                <h1>Meu estoque</h1>
+                <p role="status">Conecte-se à internet para consultar os equipamentos em sua custódia.</p>
+              </section>
+            )}
+          </main>
+        )}
+
         {/* ABA 5: FILA OFFLINE */}
         {navTab === 'QUEUE' && (
           <div className="mobile-tab-view queue-view">
@@ -879,6 +892,17 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
         >
           <span className="dock-icon"><Icon name="camera" /></span>
           <span className="dock-label">Registrar</span>
+        </button>
+
+        <button
+          type="button"
+          className={`dock-btn ${navTab === 'INVENTORY' ? 'active' : ''}`}
+          aria-current={navTab === 'INVENTORY' ? 'page' : undefined}
+          aria-label="Meu estoque"
+          onClick={() => setNavTab('INVENTORY')}
+        >
+          <span className="dock-icon"><Icon name="building" /></span>
+          <span className="dock-label">Estoque</span>
         </button>
 
         <button

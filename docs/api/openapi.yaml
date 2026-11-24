@@ -438,6 +438,50 @@ paths:
         '200': { $ref: '#/paths/~1api~1v1~1me~1inventory/get/responses/200' }
         '404': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users/{id}/deliveries:
+    get:
+      operationId: listTechnicianDeliveries
+      summary: Listar recebimentos físicos confirmados de um técnico
+      description: Requer papel de administrador. Inclui técnicos desativados e ordena do recebimento mais recente ao mais antigo.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: after
+          in: query
+          description: Cursor da última página de entregas desse técnico.
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Página de equipamentos recebidos no depósito
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, identifiers, delivered_at, warehouse_name]
+                      properties:
+                        id: { type: string, format: uuid, description: Movimento de recebimento }
+                        delivered_at: { type: string, format: date-time }
+                        warehouse_name: { type: string }
+                        identifiers:
+                          type: array
+                          items:
+                            allOf:
+                              - $ref: '#/components/schemas/SubmittedIdentifier'
+                              - type: object
+                                required: [normalized_value]
+                                properties:
+                                  normalized_value: { type: string }
+                  next_cursor: { type: [string, 'null'], format: uuid }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/captures:
     post:
       operationId: createCaptureUpload

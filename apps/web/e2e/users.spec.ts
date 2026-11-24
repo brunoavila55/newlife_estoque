@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('administrador cadastra técnico e consulta os equipamentos da conta', async ({ page, context }) => {
+test('administrador abre o perfil do técnico e consulta a posse e as entregas', async ({ page, context }) => {
   const admin = { id: 'admin', name: 'Administração', login: 'admin', role: 'administrator', active: true }
   const technician = { id: 'tech', name: 'Técnica de campo', login: 'tecnica-01', role: 'technician', active: true }
   let created = false
@@ -26,6 +26,17 @@ test('administrador cadastra técnico e consulta os equipamentos da conta', asyn
         next_cursor: null,
       } })
     }
+    if (path.endsWith('/admin/users/tech/deliveries')) {
+      return route.fulfill({ json: {
+        items: [{
+          id: 'receipt',
+          delivered_at: '2026-11-24T14:30:00Z',
+          warehouse_name: 'Depósito piloto',
+          identifiers: [{ kind: 'SERIAL', raw_value: '0002-O', normalized_value: '0002-O' }],
+        }],
+        next_cursor: null,
+      } })
+    }
     return route.fulfill({ status: 404 })
   })
   await page.goto('/')
@@ -46,7 +57,15 @@ test('administrador cadastra técnico e consulta os equipamentos da conta', asyn
   await expect(page.getByText('Conta criada para Técnica de campo (tecnica-01).')).toBeVisible()
   await expect(page.getByLabel('Senha inicial')).toHaveValue('')
   await page.getByRole('button', { name: 'Usuários', exact: true }).click()
-  await page.getByRole('button', { name: 'Ver estoque' }).click()
-  await expect(page.getByRole('heading', { name: 'Estoque de Técnica de campo' })).toBeVisible()
+  await page.getByRole('button', { name: 'Abrir técnico' }).click()
+  await expect(page.getByRole('heading', { name: technician.name })).toBeVisible()
+  const profile = page.getByRole('navigation', { name: 'Perfil do técnico' })
+  await expect(profile.getByRole('button', { name: 'Em posse' })).toHaveAttribute('aria-current', 'page')
   await expect(page.getByText('Serial: 0001-O')).toBeVisible()
+  await profile.getByRole('button', { name: 'Já entregues' }).click()
+  await expect(page.getByText('Serial: 0002-O')).toBeVisible()
+  await expect(page.getByText('Depósito piloto')).toBeVisible()
+  await expect(page.getByText('Serial: 0001-O')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Voltar aos usuários' }).click()
+  await expect(page.getByRole('heading', { name: 'Usuários cadastrados' })).toBeVisible()
 })

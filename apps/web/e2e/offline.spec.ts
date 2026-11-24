@@ -28,6 +28,49 @@ async function saveFromGallery(page: Page, file = photo, serial?: string) {
   await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
 }
 
+test('técnico consulta sua custódia atual e volta a consultar ao reconectar', async ({ page, context }) => {
+  let received = false
+  await page.setViewportSize({ width: 320, height: 640 })
+  await context.route('**/api/v1/**', (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (path.endsWith('/auth/web/login')) {
+      return route.fulfill({ json: { access_token: 'tech-token', expires_in: 3600, user: technician } })
+    }
+    if (path === '/api/v1/me/inventory') {
+      expect(request.headers().authorization).toBe('Bearer tech-token')
+      expect(new URL(request.url()).search).toBe('')
+      return route.fulfill({ json: {
+        items: received ? [] : [{
+          id: 'router',
+          identifiers: [{ kind: 'SERIAL', raw_value: '0001-O', normalized_value: '0001-O' }],
+        }],
+        next_cursor: null,
+      } })
+    }
+    return route.fulfill({ status: 404 })
+  })
+
+  await page.goto('/')
+  await signIn(page)
+  const stockTab = technicianNav(page, 'Meu estoque')
+  await stockTab.click()
+  await expect(stockTab).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByText('Serial: 0001-O')).toBeVisible()
+
+  received = true
+  await page.getByRole('button', { name: 'Atualizar', exact: true }).click()
+  await expect(page.getByText('Nenhum equipamento identificado em custódia.')).toBeVisible()
+  await expect(page.getByText('Serial: 0001-O')).toHaveCount(0)
+
+  await context.setOffline(true)
+  await expect(page.getByText('Conecte-se à internet para consultar os equipamentos em sua custódia.')).toBeVisible()
+  await technicianNav(page, 'Carteira').click()
+  await stockTab.click()
+  await context.setOffline(false)
+  await expect(page.getByText('Nenhum equipamento identificado em custódia.')).toBeVisible()
+})
+
 test('mantém dez fotos offline após fechar a aba e retoma um envio interrompido', async ({ page, context }) => {
   let interrupted = false
   const ids = new Set<string>()

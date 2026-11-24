@@ -24,7 +24,13 @@ O endereço de pré-visualização local é `http://localhost:4173`. O proxy loc
 
 ## Administração de usuários
 
-Entre com a conta administrativa e abra **Usuários**. Em **Criar usuário**, informe nome, login, perfil e senha inicial. É possível cadastrar técnicos e estoquistas. A lista mostra o perfil e o status de cada conta. Use **Ver estoque** na linha de um técnico para consultar os equipamentos identificados que estão sob sua custódia.
+Entre com a conta administrativa e abra **Usuários**. Em **Criar usuário**, informe nome, login, perfil e senha inicial. É possível cadastrar técnicos e estoquistas. A lista mostra o perfil e o status de cada conta.
+
+Na linha de um técnico, selecione **Abrir técnico**. A aba **Em posse** lista os equipamentos identificados sob sua custódia atual. A aba **Já entregues** mostra os equipamentos com recebimento físico confirmado, com data e depósito. O histórico inclui confirmações feitas em sessões ainda abertas.
+
+## Estoque do técnico
+
+Na área do técnico, abra **Estoque** para consultar os equipamentos identificados que estão sob sua custódia e aguardam devolução. A consulta exige conexão e usa a conta autenticada. Use **Atualizar** para refletir as últimas validações e devoluções confirmadas pelo depósito. As capturas e os lotes continuam disponíveis na **Carteira**, em **Lotes** e na **Fila**.
 
 ## Captura offline
 

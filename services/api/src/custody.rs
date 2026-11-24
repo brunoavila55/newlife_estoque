@@ -3,6 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgConnection, types::Json as SqlJson};
@@ -446,18 +447,35 @@ pub async fn admin_inventory(
     let (mut tx, _) = authorize(&state.db, &headers, Role::Administrator).await?;
     let technician_id =
         Uuid::parse_str(&id).map_err(|_| ApiError::invalid("Identificador inválido."))?;
+    require_technician(&mut tx, technician_id).await?;
+    let page = inventory_page(&mut tx, technician_id, query).await?;
+    tx.commit().await?;
+    Ok(Json(page))
+}
+
+async fn require_technician(db: &mut PgConnection, technician_id: Uuid) -> Result<(), ApiError> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND role = 'technician')",
     )
     .bind(technician_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(db)
     .await?;
     if !exists {
         return Err(ApiError::missing());
     }
-    let page = inventory_page(&mut tx, technician_id, query).await?;
-    tx.commit().await?;
-    Ok(Json(page))
+    Ok(())
+}
+
+fn inventory_pagination(
+    query: Result<Query<InventoryQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<(Option<Uuid>, i64), ApiError> {
+    let Query(query) =
+        query.map_err(|_| ApiError::invalid("Parâmetros de paginação inválidos."))?;
+    let limit = query.limit.unwrap_or(50);
+    if !(1..=100).contains(&limit) {
+        return Err(ApiError::invalid("Use um limite de 1 a 100 itens."));
+    }
+    Ok((query.after, limit))
 }
 
 async fn inventory_page(
@@ -465,21 +483,66 @@ async fn inventory_page(
     technician_id: Uuid,
     query: Result<Query<InventoryQuery>, axum::extract::rejection::QueryRejection>,
 ) -> Result<InventoryPage, ApiError> {
-    let Query(query) =
-        query.map_err(|_| ApiError::invalid("Parâmetros de paginação inválidos."))?;
-    let limit = query.limit.unwrap_or(50);
-    if !(1..=100).contains(&limit) {
-        return Err(ApiError::invalid("Use um limite de 1 a 100 itens."));
-    }
+    let (after, limit) = inventory_pagination(query)?;
     let mut items: Vec<InventoryEquipment> = sqlx::query_as(
         "SELECT e.id, (SELECT coalesce(jsonb_agg(jsonb_build_object('kind', kind, 'raw_value', raw_value,
                 'normalized_value', normalized_value) ORDER BY kind, normalized_value), '[]'::jsonb)
               FROM equipment_identifiers i WHERE i.equipment_id = e.id) AS identifiers
          FROM equipment e WHERE technician_id = $1 AND ($2::uuid IS NULL OR e.id > $2)
          ORDER BY e.id LIMIT $3",
-    ).bind(technician_id).bind(query.after).bind(limit + 1).fetch_all(db).await?;
+    ).bind(technician_id).bind(after).bind(limit + 1).fetch_all(db).await?;
     let has_more = items.len() > limit as usize;
     items.truncate(limit as usize);
     let next_cursor = items.last().filter(|_| has_more).map(|item| item.id);
     Ok(InventoryPage { items, next_cursor })
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct DeliveredEquipment {
+    id: Uuid,
+    identifiers: SqlJson<Vec<Identifier>>,
+    delivered_at: DateTime<Utc>,
+    warehouse_name: String,
+}
+
+#[derive(Serialize)]
+pub struct DeliveryPage {
+    items: Vec<DeliveredEquipment>,
+    next_cursor: Option<Uuid>,
+}
+
+pub async fn admin_deliveries(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    query: Result<Query<InventoryQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<Json<DeliveryPage>, ApiError> {
+    let (mut tx, _) = authorize(&state.db, &headers, Role::Administrator).await?;
+    let technician_id = parse_id(&id)?;
+    require_technician(&mut tx, technician_id).await?;
+    let (after, limit) = inventory_pagination(query)?;
+    let mut items: Vec<DeliveredEquipment> = sqlx::query_as(
+        "SELECT m.id, m.occurred_at AS delivered_at, l.name AS warehouse_name,
+            (SELECT coalesce(jsonb_agg(jsonb_build_object('kind', i.kind, 'raw_value', i.raw_value,
+                'normalized_value', i.normalized_value) ORDER BY i.kind, i.normalized_value), '[]'::jsonb)
+             FROM equipment_identifiers i WHERE i.equipment_id = m.equipment_id) AS identifiers
+         FROM custody_movements m JOIN locations l ON l.id = m.to_warehouse_id
+         WHERE m.from_technician_id = $1 AND m.movement_type = 'WAREHOUSE_RECEIVED'
+           AND ($2::uuid IS NULL OR (m.occurred_at, m.id) < (
+               SELECT cursor.occurred_at, cursor.id FROM custody_movements cursor
+               WHERE cursor.id = $2 AND cursor.from_technician_id = $1
+                   AND cursor.movement_type = 'WAREHOUSE_RECEIVED'
+           ))
+         ORDER BY m.occurred_at DESC, m.id DESC LIMIT $3",
+    )
+    .bind(technician_id)
+    .bind(after)
+    .bind(limit + 1)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let has_more = items.len() > limit as usize;
+    items.truncate(limit as usize);
+    let next_cursor = items.last().filter(|_| has_more).map(|item| item.id);
+    Ok(Json(DeliveryPage { items, next_cursor }))
 }
