@@ -1,12 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, storePhoto, freeSpace, type Capture, type Profile, type User } from '../db'
-import { preparePhoto, readBarcode, validBarcode } from '../photo'
+import { preparePhoto } from '../photo'
 import { LabelCamera } from '../label-camera'
 import type { BarcodeEvidence } from '../db'
 import { QRCodeSVG } from '../components/qrcode'
 import { playSound } from '../audio'
-import { ApiError, authenticated } from '../api'
 
 const dateTime = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
 
@@ -19,15 +18,14 @@ interface TechDeskProps {
 }
 
 export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskProps) {
-  // Navigation tabs for the technician
   const [navTab, setNavTab] = useState<'HOME' | 'CAPTURE' | 'CARTEIRA' | 'LOTES' | 'QUEUE'>('HOME')
 
   const [notice, setNotice] = useState('')
   const [success, setSuccess] = useState('')
   const [saving, setSaving] = useState(false)
-  const [leaving, setLeaving] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [lowSpace, setLowSpace] = useState(false)
+  const [usedStorageMB, setUsedStorageMB] = useState<string>('0')
 
   // Capture & Complementary form state
   const [barcode, setBarcode] = useState('')
@@ -39,13 +37,14 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
   const [powerSupply, setPowerSupply] = useState<'ORIGINAL' | 'REPLACEMENT' | 'MISSING'>('ORIGINAL')
   const [cablesPresent, setCablesPresent] = useState(true)
   const [notes, setNotes] = useState('')
-  const [nextMode, setNextMode] = useState(false) // Modo registrar próximo
+  const [nextMode, setNextMode] = useState(false)
 
   const [liveCamera, setLiveCamera] = useState(false)
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
   const [currentFile, setCurrentFile] = useState<File | null>(null)
 
-  // Carteira multi-selection state for creating a batch
+  // Carteira search & multi-select
+  const [carteiraSearch, setCarteiraSearch] = useState('')
   const [selectedForBatch, setSelectedForBatch] = useState<string[]>([])
   const [batchNotes, setBatchNotes] = useState('')
   const [showCreateBatchModal, setShowCreateBatchModal] = useState(false)
@@ -54,7 +53,6 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const pickerInputRef = useRef<HTMLInputElement>(null)
 
-  // Database queries
   const captures = useLiveQuery(
     async () => (await db.captures.where('owner').equals(profile.id).sortBy('capturedAt')).reverse(),
     [profile.id]
@@ -69,29 +67,34 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
   const identifiedCount = captures?.filter((c) => c.remoteStatus === 'IDENTIFIED').length || 0
 
   const checkSpace = useCallback(async () => {
-    const free = await freeSpace()
-    setLowSpace(free !== null && free < 40 * 1024 * 1024)
+    try {
+      const estimate = await navigator.storage?.estimate()
+      if (estimate?.usage) {
+        setUsedStorageMB((estimate.usage / (1024 * 1024)).toFixed(1))
+      }
+      const free = await freeSpace()
+      setLowSpace(free !== null && free < 40 * 1024 * 1024)
+    } catch {
+      // ignore
+    }
   }, [])
 
   useEffect(() => {
     void checkSpace()
   }, [checkSpace])
 
-  // Normalização visual de MAC Address em tempo real
   function handleMacChange(val: string) {
     const clean = val.replace(/[^0-9A-Fa-f]/g, '').toUpperCase().slice(0, 12)
     const formatted = clean.match(/.{1,2}/g)?.join(':') || clean
     setMacAddress(formatted)
   }
 
-  // Capturar foto e abrir tela de revisão complementar
   async function handlePhotoSelected(file?: File, liveEvidence?: BarcodeEvidence) {
     if (!file) return
     setCurrentFile(file)
     setPreviewBlobUrl(URL.createObjectURL(file))
     setLiveCamera(false)
 
-    // Se detectou código com leitor na câmera
     if (liveEvidence) {
       const code = liveEvidence.raw_value.trim()
       if (/^[0-9A-Fa-f]{12}$/.test(code.replace(/[:-]/g, ''))) {
@@ -102,10 +105,9 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
     }
   }
 
-  // Salvar foto com metadados complementares
   async function handleSaveCapture() {
     if (!currentFile) {
-      alert('Nenhuma foto foi capturada.')
+      alert('Nenhuma foto capturada.')
       return
     }
     setSaving(true)
@@ -121,34 +123,26 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
         ? { raw_value: barcode.trim(), source: 'MANUAL' }
         : undefined
 
-      await storePhoto(
-        profile.id,
-        photo,
-        capturedAt,
-        evidence,
-        {
-          model: selectedModel,
-          serviceOrder: serviceOrder.trim() || undefined,
-          condition,
-          powerSupply,
-          cables: cablesPresent,
-          notes: notes.trim() || undefined,
-        }
-      )
+      await storePhoto(profile.id, photo, capturedAt, evidence, {
+        model: selectedModel,
+        serviceOrder: serviceOrder.trim() || undefined,
+        condition,
+        powerSupply,
+        cables: cablesPresent,
+        notes: notes.trim() || undefined,
+      })
 
       playSound('SHUTTER')
 
       if (nextMode) {
-        // Produtividade: mantém a mesma OS e modelo, mas limpa serial e MAC para o próximo
         setSerialNumber('')
         setMacAddress('')
         setBarcode('')
         setCurrentFile(null)
         if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl)
         setPreviewBlobUrl(null)
-        setSuccess('Salvo! Pronto para fotografar o próximo equipamento desta OS.')
+        setSuccess('Salvo! Enquadre o próximo roteador desta mesma OS.')
       } else {
-        // Reset completo
         setSerialNumber('')
         setMacAddress('')
         setBarcode('')
@@ -156,7 +150,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
         setCurrentFile(null)
         if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl)
         setPreviewBlobUrl(null)
-        setSuccess('Equipamento registrado com sucesso no dispositivo.')
+        setSuccess('Equipamento registrado com sucesso no celular.')
         setNavTab('QUEUE')
       }
 
@@ -169,7 +163,6 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
     }
   }
 
-  // Criar lote a partir dos itens selecionados na carteira
   async function handleCreateBatch() {
     if (selectedForBatch.length === 0) {
       alert('Selecione ao menos um equipamento para criar o lote.')
@@ -178,12 +171,11 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
     const batchId = crypto.randomUUID()
     const code = `LOTE-${new Date().toISOString().slice(2, 7).replace('-', '')}-${Math.floor(100 + Math.random() * 900)}`
 
-    // Itens selecionados da carteira
     const selectedCaptures = captures?.filter((c) => selectedForBatch.includes(c.id)) || []
     const batchItems = selectedCaptures.map((c) => ({
       equipment_id: c.remoteId || c.id,
-      serial: c.barcode?.raw_value || 'SN-PENDENTE',
-      mac: 'E0:D9:E3:...',
+      serial: c.barcode?.raw_value || 'SN-EM-OCR',
+      mac: 'MAC-EM-OCR',
       model: c.complement?.model || 'ONU / Roteador',
       status: 'PENDING' as const,
     }))
@@ -195,7 +187,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
       technician_name: profile.name,
       warehouse_id: '00000000-0000-4000-8000-000000000001',
       warehouse_name: 'Depósito Piloto - Sala 01',
-      status: 'PRESENTED', // Apresentado no balcão
+      status: 'PRESENTED',
       notes: batchNotes.trim() || undefined,
       items: batchItems,
       total_items: batchItems.length,
@@ -208,116 +200,182 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
     setBatchNotes('')
     setShowCreateBatchModal(false)
     setNavTab('LOTES')
-    alert(`Lote ${code} gerado com sucesso! Apresente o QR Code no balcão do estoque.`)
+    playSound('MATCHED')
   }
 
+  const filteredCarteira = captures?.filter((c) => {
+    if (!carteiraSearch.trim()) return true
+    const term = carteiraSearch.toLowerCase()
+    return (
+      (c.barcode?.raw_value && c.barcode.raw_value.toLowerCase().includes(term)) ||
+      (c.complement?.model && c.complement.model.toLowerCase().includes(term)) ||
+      (c.complement?.serviceOrder && c.complement.serviceOrder.toLowerCase().includes(term))
+    )
+  })
+
   return (
-    <div className="tech-mobile-container">
-      {/* Topbar móvel */}
-      <header className="tech-topbar">
-        <div className="tech-profile-info">
-          <span className="tech-greeting">Olá, {profile.name.split(' ')[0]}!</span>
-          <span className="tech-sub-status">Técnico em Campo · Unidade Piloto</span>
+    <div className="mobile-app-shell">
+      {/* 1. Barra de status móvel nativa */}
+      <header className="mobile-system-header">
+        <div className="mobile-status-bar">
+          <span className="mobile-clock">{new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+          <div className="mobile-status-indicators">
+            <span className={`network-pill ${navigator.onLine ? 'online' : 'offline'}`}>
+              <span className="dot" /> {navigator.onLine ? '4G Online' : 'Sem Sinal'}
+            </span>
+            <span className="battery-icon">🔋 98%</span>
+          </div>
         </div>
-        <button
-          className="exit-btn-small"
-          onClick={() => (pendingCount > 0 ? setConfirmLeave(true) : void leaveDesk())}
-        >
-          {navigator.onLine ? 'Sair' : 'Bloquear'}
-        </button>
+
+        <div className="mobile-app-bar">
+          <div className="user-tech-badge">
+            <div className="tech-avatar">{profile.name.charAt(0).toUpperCase()}</div>
+            <div className="tech-meta">
+              <strong className="tech-name">{profile.name}</strong>
+              <span className="tech-role-tag">Técnico em Campo · New Life</span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="mobile-exit-btn"
+            onClick={() => (pendingCount > 0 ? setConfirmLeave(true) : void leaveDesk())}
+            title={navigator.onLine ? 'Sair' : 'Bloquear'}
+          >
+            {navigator.onLine ? 'Sair' : 'Bloquear'}
+          </button>
+        </div>
       </header>
 
       {/* Alerta de confirmação de saída com fotos pendentes */}
       {confirmLeave && (
-        <section className="card exit-confirm-card">
+        <section className="mobile-alert-banner warning">
           <p>
-            Há <strong>{pendingCount} foto(s) pendente(s)</strong> a enviar. Elas ficarão guardadas com segurança no
-            dispositivo até você entrar novamente.
+            Você possui <strong>{pendingCount} foto(s) pendente(s)</strong> a enviar. Elas permanecerão guardadas neste celular.
           </p>
-          <div className="actions">
-            <button onClick={() => setConfirmLeave(false)}>Continuar Conectado</button>
-            <button className="danger-btn" onClick={() => void leaveDesk()}>
-              Sair e Manter Fotos
-            </button>
+          <div className="banner-actions">
+            <button className="small-btn" onClick={() => setConfirmLeave(false)}>Continuar Conectado</button>
+            <button className="small-btn danger-btn" onClick={() => void leaveDesk()}>Sair e Manter</button>
           </div>
         </section>
       )}
 
-      {notice && <p className="alert">{notice}</p>}
-      {success && <p className="success">{success}</p>}
+      {notice && <div className="mobile-toast alert">{notice}</div>}
+      {success && <div className="mobile-toast success">{success}</div>}
       {lowSpace && (
-        <p className="alert">
-          ⚠️ Pouco espaço no celular. Conecte-se à internet para sincronizar as fotos pendentes.
-        </p>
+        <div className="mobile-toast alert">
+          ⚠️ Pouco espaço disponível no celular. Sincronize suas fotos pendentes.
+        </div>
       )}
 
-      {/* CONTEÚDO PRINCIPAL BASEADO NA TAB ATIVA */}
-      <main className="tech-main-content">
-        {/* TAB 1: INÍCIO (DASHBOARD DO TÉCNICO) */}
+      {/* 2. Conteúdo Principal das 5 Abas */}
+      <div className="mobile-scrollable-body">
+        {/* ABA 1: INÍCIO */}
         {navTab === 'HOME' && (
-          <div className="tech-home-view">
-            <div className="tech-kpi-banner card">
-              <div className="kpi-banner-top">
-                <div>
-                  <span className="banner-label">Sob Sua Custódia</span>
-                  <h2 className="banner-number">{identifiedCount + pendingCount} equipamentos</h2>
-                </div>
-                <div className="retention-indicator">
-                  <span className="badge badge-success">4 dias em posse</span>
-                </div>
+          <div className="mobile-tab-view home-view">
+            {/* Hero Card Glassmorphic */}
+            <div className="mobile-hero-card">
+              <div className="hero-top-row">
+                <span className="hero-subtitle">Sob Sua Custódia</span>
+                <span className="retention-pill success">✓ 4 dias retido</span>
               </div>
-              <p className="muted small-text">
-                {pendingCount > 0
-                  ? `⚡ ${pendingCount} foto(s) aguardando sincronização`
-                  : '✓ Todas as fotos sincronizadas com o servidor'}
-              </p>
+              <div className="hero-counter-wrap">
+                <h1 className="hero-main-counter">{identifiedCount + pendingCount}</h1>
+                <span className="hero-counter-unit">roteadores em campo</span>
+              </div>
+
+              <div className="hero-sync-status">
+                {pendingCount > 0 ? (
+                  <span className="sync-tag pending">⚡ {pendingCount} fotos aguardando sincronização</span>
+                ) : (
+                  <span className="sync-tag synced">✓ Todas as coletas sincronizadas</span>
+                )}
+              </div>
 
               <button
-                className="primary large-cta-btn"
+                type="button"
+                className="mobile-hero-cta"
                 onClick={() => setNavTab('CAPTURE')}
               >
-                📸 Registrar Novo Equipamento
+                <span className="cta-icon">📸</span>
+                <span>Fotografar Novo Roteador</span>
               </button>
             </div>
 
-            <div className="tech-quick-shortcuts">
-              <div className="shortcut-card" onClick={() => setNavTab('CARTEIRA')}>
-                <span className="shortcut-icon">💼</span>
-                <strong>Minha Carteira</strong>
-                <small className="muted">{identifiedCount} identificados</small>
+            {/* Widget Grid de Acesso Rápido */}
+            <div className="mobile-widget-grid">
+              <div className="mobile-widget-card" onClick={() => setNavTab('CARTEIRA')}>
+                <div className="widget-icon-box blue">💼</div>
+                <strong className="widget-value">{identifiedCount}</strong>
+                <span className="widget-title">Minha Carteira</span>
               </div>
 
-              <div className="shortcut-card" onClick={() => setNavTab('LOTES')}>
-                <span className="shortcut-icon">📋</span>
-                <strong>Meus Lotes</strong>
-                <small className="muted">{batches?.length || 0} lote(s) criados</small>
+              <div className="mobile-widget-card" onClick={() => setNavTab('LOTES')}>
+                <div className="widget-icon-box teal">📋</div>
+                <strong className="widget-value">{batches?.length || 0}</strong>
+                <span className="widget-title">Lotes Gerados</span>
               </div>
 
-              <div className="shortcut-card" onClick={() => setNavTab('QUEUE')}>
-                <span className="shortcut-icon">🔄</span>
-                <strong>Fila de Fotos</strong>
-                <small className="muted">{pendingCount} pendente(s)</small>
+              <div className="mobile-widget-card" onClick={() => setNavTab('QUEUE')}>
+                <div className="widget-icon-box orange">🔄</div>
+                <strong className="widget-value">{pendingCount}</strong>
+                <span className="widget-title">Fila Offline</span>
               </div>
             </div>
 
-            <div className="card guide-quick-card">
-              <h4>Dica de Produtividade em Campo</h4>
-              <p className="muted small-text">
-                Fotografe a etiqueta nítida. Se for recolher mais de um roteador no mesmo cliente, ative o modo{' '}
-                <em>"Registrar próximo"</em> para manter a mesma Ordem de Serviço preenchida automaticamente.
+            {/* Banner de Produtividade */}
+            <div className="mobile-card info-card">
+              <div className="card-header-icon">
+                <span className="icon">💡</span>
+                <strong>Agilidade na Casa do Cliente</strong>
+              </div>
+              <p className="small-text muted">
+                Ao recolher mais de um aparelho no mesmo assinante, ative o <strong>"Modo Próximo"</strong> na tela de revisão para manter a Ordem de Serviço (OS) preenchida.
               </p>
             </div>
+
+            {/* Resumo de Lotes Recentes */}
+            {batches && batches.length > 0 && (
+              <div className="mobile-section-block">
+                <div className="section-title-row">
+                  <h3>Últimos Lotes Apresentados</h3>
+                  <button className="link-btn" onClick={() => setNavTab('LOTES')}>Ver Todos</button>
+                </div>
+                <div className="recent-batches-list">
+                  {batches.slice(0, 2).map((b) => (
+                    <div key={b.id} className="mobile-card batch-row-card" onClick={() => { setActiveBatchModal(b); setNavTab('LOTES') }}>
+                      <div className="batch-row-left">
+                        <strong>{b.code}</strong>
+                        <span className="muted small-text">{b.total_items} equipamento(s)</span>
+                      </div>
+                      <span className="badge badge-info">{b.status}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* TAB 2: REGISTRAR EQUIPAMENTO (CÂMERA, OCR E CADASTRO COMPLEMENTAR) */}
+        {/* ABA 2: REGISTRAR (CÂMERA & CADASTRO) */}
         {navTab === 'CAPTURE' && (
-          <div className="tech-capture-view">
+          <div className="mobile-tab-view capture-view">
             {!previewBlobUrl ? (
-              <div className="card camera-choice-card">
-                <h3>Fotografar Etiqueta do Equipamento</h3>
-                <p className="muted">
-                  Enquadre os códigos de barras, número de série (SN) e endereço MAC com boa iluminação.
+              <div className="mobile-capture-hero card">
+                <div className="viewfinder-icon-illustration">
+                  <div className="scanner-frame-art">
+                    <span className="bracket tl" />
+                    <span className="bracket tr" />
+                    <span className="bracket bl" />
+                    <span className="bracket br" />
+                    <span className="laser-art" />
+                    <span className="barcode-bars-art">||| | ||| || |</span>
+                  </div>
+                </div>
+
+                <h2>Fotografar Etiqueta</h2>
+                <p className="muted text-center">
+                  Posicione a etiqueta do roteador com boa iluminação. O leitor decodificará os códigos em tempo real.
                 </p>
 
                 {liveCamera ? (
@@ -333,19 +391,25 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                     }}
                   />
                 ) : (
-                  <div className="camera-actions-vertical">
+                  <div className="capture-buttons-stack">
                     <button
-                      className="primary large-btn"
+                      type="button"
+                      className="primary mobile-big-btn"
                       onClick={() =>
                         typeof navigator.mediaDevices?.getUserMedia === 'function'
                           ? setLiveCamera(true)
                           : cameraInputRef.current?.click()
                       }
                     >
-                      📷 Abrir Câmera Traseira
+                      <span className="btn-icon">📷</span> Abrir Câmera Traseira
                     </button>
-                    <button onClick={() => pickerInputRef.current?.click()}>
-                      📁 Escolher da Galeria
+
+                    <button
+                      type="button"
+                      className="secondary mobile-big-btn"
+                      onClick={() => pickerInputRef.current?.click()}
+                    >
+                      <span className="btn-icon">🖼️</span> Escolher da Galeria
                     </button>
                   </div>
                 )}
@@ -373,11 +437,12 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                 />
               </div>
             ) : (
-              /* TELA DE REVISÃO E CADASTRO COMPLEMENTAR (Capítulo 04 & 05) */
-              <div className="card review-complement-card">
-                <div className="review-top-bar">
-                  <h3>Revisão e Cadastro da Coleta</h3>
+              /* Tela de Revisão da Foto com Formulário Complementar */
+              <div className="mobile-review-form-wrap card">
+                <div className="review-header-bar">
+                  <h3>Conferência e Dados da Coleta</h3>
                   <button
+                    type="button"
                     className="small-btn"
                     onClick={() => {
                       setCurrentFile(null)
@@ -385,135 +450,163 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                       setPreviewBlobUrl(null)
                     }}
                   >
-                    Tirar Outra Foto
+                    Tirar Outra
                   </button>
                 </div>
 
-                <div className="photo-preview-box">
-                  <img src={previewBlobUrl} alt="Foto da Etiqueta" className="label-preview-img" />
+                <div className="captured-photo-thumb-wrap">
+                  <img src={previewBlobUrl} alt="Etiqueta Capturada" className="captured-photo-img" />
+                  <span className="photo-tag">✓ Foto Gravada</span>
                 </div>
 
-                <form onSubmit={(e) => { e.preventDefault(); void handleSaveCapture() }} className="complement-form">
-                  <div className="form-section-title">Identificadores da Etiqueta</div>
-
-                  <label>
-                    Número de Série (SN / S/N)
-                    <input
-                      type="text"
-                      className="mono"
-                      placeholder="Ex: 48575443F89A1201"
-                      value={serialNumber}
-                      onChange={(e) => setSerialNumber(e.target.value.toUpperCase())}
-                    />
-                    <small className="muted">Zeros à esquerda são estritamente preservados.</small>
-                  </label>
-
-                  <label>
-                    Endereço MAC
-                    <input
-                      type="text"
-                      className="mono"
-                      placeholder="AA:BB:CC:DD:EE:FF"
-                      value={macAddress}
-                      onChange={(e) => handleMacChange(e.target.value)}
-                    />
-                  </label>
-
-                  <div className="form-section-title">Dados Complementares de Recolhimento</div>
-
-                  <label>
-                    Modelo do Equipamento
-                    <select
-                      value={selectedModel}
-                      onChange={(e) => setSelectedModel(e.target.value)}
-                    >
-                      {models?.map((m) => (
-                        <option key={m.id} value={`${m.manufacturer} ${m.model}`}>
-                          {m.manufacturer} - {m.model}
-                        </option>
-                      ))}
-                      <option value="Outro Modelo">Outro / Não listado</option>
-                    </select>
-                  </label>
-
-                  <label>
-                    Nº da Ordem de Serviço (OS) / Cliente
-                    <input
-                      type="text"
-                      placeholder="Ex: OS-98124 ou Nome do Assinante"
-                      value={serviceOrder}
-                      onChange={(e) => setServiceOrder(e.target.value)}
-                    />
-                  </label>
-
-                  <div className="form-grid-2">
+                <form onSubmit={(e) => { e.preventDefault(); void handleSaveCapture() }} className="mobile-form-body">
+                  <div className="form-group">
                     <label>
-                      Condição da Carcaça
-                      <select
-                        value={condition}
-                        onChange={(e) => setCondition(e.target.value as any)}
-                      >
-                        <option value="GOOD">Bom Estado / Sem Danos</option>
-                        <option value="DAMAGED">Avariado / Quebrado</option>
-                      </select>
+                      Número de Série (SN)
+                      <div className="input-with-badge">
+                        <input
+                          type="text"
+                          required
+                          className="mono"
+                          placeholder="Ex: 48575443F89A1201"
+                          value={serialNumber}
+                          onChange={(e) => setSerialNumber(e.target.value.toUpperCase())}
+                        />
+                        <span className="input-tag">Zeros preservados</span>
+                      </div>
                     </label>
+                  </div>
 
+                  <div className="form-group">
                     <label>
-                      Fonte de Alimentação
+                      Endereço MAC
+                      <input
+                        type="text"
+                        className="mono"
+                        placeholder="AA:BB:CC:DD:EE:FF"
+                        value={macAddress}
+                        onChange={(e) => handleMacChange(e.target.value)}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="form-group">
+                    <label>
+                      Modelo Homologado
                       <select
-                        value={powerSupply}
-                        onChange={(e) => setPowerSupply(e.target.value as any)}
+                        value={selectedModel}
+                        onChange={(e) => setSelectedModel(e.target.value)}
                       >
-                        <option value="ORIGINAL">Original Presente</option>
-                        <option value="REPLACEMENT">Paralela Homologada</option>
-                        <option value="MISSING">Ausente</option>
+                        {models?.map((m) => (
+                          <option key={m.id} value={`${m.manufacturer} ${m.model}`}>
+                            {m.manufacturer} · {m.model}
+                          </option>
+                        ))}
+                        <option value="Outro Modelo">Outro Modelo / Desconhecido</option>
                       </select>
                     </label>
                   </div>
 
-                  <label className="check-label-inline">
-                    <input
-                      type="checkbox"
-                      checked={cablesPresent}
-                      onChange={(e) => setCablesPresent(e.target.checked)}
-                    />
-                    <span>Cabos de rede e energia inclusos</span>
-                  </label>
+                  <div className="form-group">
+                    <label>
+                      Ordem de Serviço (OS) ou Contrato
+                      <input
+                        type="text"
+                        placeholder="Ex: OS-10492 ou Nome do Cliente"
+                        value={serviceOrder}
+                        onChange={(e) => setServiceOrder(e.target.value)}
+                      />
+                    </label>
+                  </div>
 
-                  <label>
-                    Observações de Campo
-                    <textarea
-                      rows={2}
-                      placeholder="Ex: Retirado por cancelamento de contrato, cliente entregou na caixa..."
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                    />
-                  </label>
+                  {/* Segmented Buttons para Condição da Carcaça */}
+                  <div className="form-group">
+                    <label>Estado da Carcaça</label>
+                    <div className="segmented-control">
+                      <button
+                        type="button"
+                        className={`seg-btn ${condition === 'GOOD' ? 'active' : ''}`}
+                        onClick={() => setCondition('GOOD')}
+                      >
+                        ✓ Bom Estado
+                      </button>
+                      <button
+                        type="button"
+                        className={`seg-btn ${condition === 'DAMAGED' ? 'active' : ''}`}
+                        onClick={() => setCondition('DAMAGED')}
+                      >
+                        ⚠️ Avariado / Riscado
+                      </button>
+                    </div>
+                  </div>
 
-                  {/* Toggle Modo Próximo Equipamento (Produtividade) */}
-                  <div className="next-mode-box">
-                    <label className="check-label-inline">
+                  {/* Segmented Buttons para Fonte */}
+                  <div className="form-group">
+                    <label>Fonte de Alimentação</label>
+                    <div className="segmented-control three-way">
+                      <button
+                        type="button"
+                        className={`seg-btn ${powerSupply === 'ORIGINAL' ? 'active' : ''}`}
+                        onClick={() => setPowerSupply('ORIGINAL')}
+                      >
+                        Original
+                      </button>
+                      <button
+                        type="button"
+                        className={`seg-btn ${powerSupply === 'REPLACEMENT' ? 'active' : ''}`}
+                        onClick={() => setPowerSupply('REPLACEMENT')}
+                      >
+                        Paralela
+                      </button>
+                      <button
+                        type="button"
+                        className={`seg-btn ${powerSupply === 'MISSING' ? 'active' : ''}`}
+                        onClick={() => setPowerSupply('MISSING')}
+                      >
+                        Ausente
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Toggle iOS para Cabos */}
+                  <div className="toggle-row-card">
+                    <div>
+                      <strong>Cabos Inclusos</strong>
+                      <small className="muted display-block">Cabo de rede RJ45 e fibra</small>
+                    </div>
+                    <label className="switch">
+                      <input
+                        type="checkbox"
+                        checked={cablesPresent}
+                        onChange={(e) => setCablesPresent(e.target.checked)}
+                      />
+                      <span className="slider round" />
+                    </label>
+                  </div>
+
+                  {/* Switch para Modo Registrar Próximo */}
+                  <div className="toggle-row-card next-mode-glow">
+                    <div>
+                      <strong className="text-teal">⚡ Modo Registrar Próximo</strong>
+                      <small className="muted display-block">Mantém a mesma OS e modelo para o próximo bipe</small>
+                    </div>
+                    <label className="switch">
                       <input
                         type="checkbox"
                         checked={nextMode}
                         onChange={(e) => setNextMode(e.target.checked)}
                       />
-                      <div>
-                        <strong>Modo Registrar Próximo (Produtividade)</strong>
-                        <small className="muted">
-                          Mantém a mesma OS e modelo preenchidos para você bipar o próximo aparelho do cliente.
-                        </small>
-                      </div>
+                      <span className="slider round" />
                     </label>
                   </div>
 
-                  <div className="actions form-actions-sticky">
+                  <div className="mobile-sticky-save-bar">
                     <button
                       type="submit"
-                      className="primary large-btn full-width"
+                      className="primary mobile-big-btn full-width"
                       disabled={saving}
                     >
-                      {saving ? 'Gravando no Celular…' : '💾 Salvar Equipamento'}
+                      {saving ? 'Gravando no Celular…' : '💾 Salvar no Dispositivo'}
                     </button>
                   </div>
                 </form>
@@ -522,81 +615,107 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
           </div>
         )}
 
-        {/* TAB 3: MINHA CARTEIRA (COM SELEÇÃO PARA CRIAR LOTE) */}
+        {/* ABA 3: MINHA CARTEIRA */}
         {navTab === 'CARTEIRA' && (
-          <div className="tech-carteira-view">
-            <div className="section-head">
-              <div>
-                <h3>Minha Carteira em Campo</h3>
-                <p className="muted">Equipamentos sob sua responsabilidade aguardando devolução no estoque.</p>
-              </div>
+          <div className="mobile-tab-view carteira-view">
+            <div className="carteira-top-bar">
+              <input
+                type="search"
+                placeholder="Buscar por serial, modelo ou OS…"
+                value={carteiraSearch}
+                onChange={(e) => setCarteiraSearch(e.target.value)}
+                className="mobile-search-input"
+              />
+            </div>
+
+            <div className="carteira-stats-line">
+              <span className="muted">{filteredCarteira?.length || 0} equipamento(s) sob sua guarda</span>
               {selectedForBatch.length > 0 && (
-                <button
-                  className="primary"
-                  onClick={() => setShowCreateBatchModal(true)}
-                >
-                  Criar Lote ({selectedForBatch.length})
-                </button>
+                <button className="link-btn" onClick={() => setSelectedForBatch([])}>Desmarcar Todos</button>
               )}
             </div>
 
-            {captures && captures.length > 0 ? (
-              <ul className="items-list-cards">
-                {captures.map((item) => {
+            {filteredCarteira && filteredCarteira.length > 0 ? (
+              <div className="carteira-cards-stack">
+                {filteredCarteira.map((item) => {
                   const isSelected = selectedForBatch.includes(item.id)
                   return (
-                    <li
+                    <div
                       key={item.id}
-                      className={`card carteira-item-card ${isSelected ? 'selected' : ''}`}
+                      className={`mobile-equipment-card ${isSelected ? 'selected' : ''}`}
                       onClick={() => {
                         setSelectedForBatch((prev) =>
                           prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]
                         )
                       }}
                     >
-                      <div className="card-selection-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => {}}
-                        />
-                      </div>
-                      <div className="carteira-item-info">
-                        <strong>{item.complement?.model || 'ONU / Roteador'}</strong>
-                        <div className="mono-codes">
-                          <span>SN: {item.barcode?.raw_value || 'Identificando...'}</span>
+                      <div className="card-checkbox">
+                        <div className={`checkbox-circle ${isSelected ? 'checked' : ''}`}>
+                          {isSelected && '✓'}
                         </div>
-                        {item.complement?.serviceOrder && (
-                          <small className="muted">OS: {item.complement.serviceOrder}</small>
-                        )}
-                        <small className="muted">Coletado em: {dateTime.format(new Date(item.capturedAt))}</small>
                       </div>
-                      <div className="carteira-item-status">
-                        <span className="badge badge-info">Em Posse</span>
+
+                      <div className="equipment-icon-col">
+                        <div className="device-avatar">📡</div>
                       </div>
-                    </li>
+
+                      <div className="equipment-info-col">
+                        <div className="equipment-title-row">
+                          <strong>{item.complement?.model || 'ONU / Roteador'}</strong>
+                          <span className="custody-tag">Em Custódia</span>
+                        </div>
+
+                        <div className="equipment-codes">
+                          <span className="mono-code">SN: {item.barcode?.raw_value || 'Pendente OCR'}</span>
+                        </div>
+
+                        <div className="equipment-sub-meta">
+                          {item.complement?.serviceOrder && (
+                            <span className="os-badge">OS: {item.complement.serviceOrder}</span>
+                          )}
+                          <span className="date-text">{dateTime.format(new Date(item.capturedAt))}</span>
+                        </div>
+                      </div>
+                    </div>
                   )
                 })}
-              </ul>
+              </div>
             ) : (
-              <div className="empty-state">
-                Você não possui equipamentos sob custódia no momento.
+              <div className="mobile-empty-state card">
+                <span className="empty-icon">📦</span>
+                <h3>Carteira Vazia</h3>
+                <p className="muted">Nenhum equipamento aguardando devolução neste momento.</p>
               </div>
             )}
 
-            {/* Modal de Criação de Lote */}
+            {/* Floating Action Sheet quando há itens selecionados */}
+            {selectedForBatch.length > 0 && (
+              <div className="mobile-floating-batch-bar">
+                <div className="floating-batch-info">
+                  <strong>{selectedForBatch.length}</strong>
+                  <span>selecionado(s)</span>
+                </div>
+                <button
+                  type="button"
+                  className="primary floating-cta-btn"
+                  onClick={() => setShowCreateBatchModal(true)}
+                >
+                  Gerar Lote de Devolução →
+                </button>
+              </div>
+            )}
+
+            {/* Modal de Confirmação do Lote */}
             {showCreateBatchModal && (
               <div className="modal-overlay" onClick={() => setShowCreateBatchModal(false)}>
                 <div className="modal-box card" onClick={(e) => e.stopPropagation()}>
                   <div className="modal-head">
-                    <h3>Criar Lote de Devolução (Cap. 07)</h3>
-                    <button className="close-btn" onClick={() => setShowCreateBatchModal(false)}>
-                      ✕
-                    </button>
+                    <h3>Criar Lote com {selectedForBatch.length} Itens</h3>
+                    <button className="close-btn" onClick={() => setShowCreateBatchModal(false)}>✕</button>
                   </div>
-                  <p className="muted">
-                    Será gerado um código e QR Code com os <strong>{selectedForBatch.length} equipamentos</strong>{' '}
-                    selecionados para você apresentar na mesa do estoquista.
+
+                  <p className="muted small-text">
+                    Será gerado um código de lote e um QR Code na tela para o estoquista bipar no balcão e conferir a entrega física.
                   </p>
 
                   <label>
@@ -605,10 +724,10 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                   </label>
 
                   <label>
-                    Observações da Entrega (Opcional)
+                    Observações de Entrega (Opcional)
                     <textarea
-                      rows={3}
-                      placeholder="Ex: Recolhidos na rota da zona leste, todos com fonte..."
+                      rows={2}
+                      placeholder="Ex: Roteadores recolhidos na rota sul..."
                       value={batchNotes}
                       onChange={(e) => setBatchNotes(e.target.value)}
                     />
@@ -626,85 +745,94 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
           </div>
         )}
 
-        {/* TAB 4: MEUS LOTES DE DEVOLUÇÃO */}
+        {/* ABA 4: MEUS LOTES */}
         {navTab === 'LOTES' && (
-          <div className="tech-lotes-view">
-            <div className="section-head">
-              <div>
-                <h3>Meus Lotes de Entrega</h3>
-                <p className="muted">Toque no lote para abrir o QR Code e apresentar na mesa de conferência.</p>
-              </div>
+          <div className="mobile-tab-view lotes-view">
+            <div className="section-header-compact">
+              <h2>Meus Lotes de Entrega</h2>
+              <p className="muted small-text">Toque no lote para abrir o QR Code para o conferente.</p>
             </div>
 
             {batches && batches.length > 0 ? (
-              <ul className="items-list-cards">
-                {batches.map((batch) => (
-                  <li
-                    key={batch.id}
-                    className="card batch-card-mobile"
-                    onClick={() => setActiveBatchModal(batch)}
-                  >
-                    <div className="batch-card-top">
-                      <strong>{batch.code}</strong>
-                      <span className="badge badge-info">{batch.status}</span>
-                    </div>
-                    <p className="muted small-text">
-                      {batch.total_items} equipamento(s) · Destino: {batch.warehouse_name}
-                    </p>
-                    <div className="progress-cell">
-                      <div className="progress-bar-small">
-                        <div
-                          className="progress-fill"
-                          style={{
-                            width: `${batch.total_items > 0 ? Math.round((batch.accepted_items / batch.total_items) * 100) : 0}%`,
-                          }}
-                        />
+              <div className="batches-cards-stack">
+                {batches.map((batch) => {
+                  const pct = batch.total_items > 0 ? Math.round((batch.accepted_items / batch.total_items) * 100) : 0
+                  return (
+                    <div
+                      key={batch.id}
+                      className="mobile-batch-card card"
+                      onClick={() => setActiveBatchModal(batch)}
+                    >
+                      <div className="batch-card-header">
+                        <div className="batch-code-block">
+                          <strong>{batch.code}</strong>
+                          <span className="batch-date-text">{dateTime.format(new Date(batch.created_at))}</span>
+                        </div>
+                        <span className={`badge status-${batch.status.toLowerCase()}`}>
+                          {batch.status === 'PRESENTED' ? 'Apresentado' : batch.status === 'COMPLETED' ? 'Concluído' : batch.status}
+                        </span>
                       </div>
-                      <small className="muted">
-                        {batch.accepted_items}/{batch.total_items} confirmados
-                      </small>
+
+                      <div className="batch-progress-wrapper">
+                        <div className="batch-progress-bar">
+                          <div className="fill" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="batch-progress-text">
+                          {batch.accepted_items} de {batch.total_items} aceitos ({pct}%)
+                        </span>
+                      </div>
+
+                      <div className="batch-card-footer">
+                        <span className="tap-qr-hint">📲 Toque para ver QR Code</span>
+                        <span className="arrow-right">→</span>
+                      </div>
                     </div>
-                  </li>
-                ))}
-              </ul>
+                  )
+                })}
+              </div>
             ) : (
-              <div className="empty-state">
-                Nenhum lote criado ainda. Vá até a aba <em>Minha Carteira</em>, selecione os equipamentos e clique em{' '}
-                <em>Criar Lote</em>.
+              <div className="mobile-empty-state card">
+                <span className="empty-icon">📋</span>
+                <h3>Nenhum Lote Criado</h3>
+                <p className="muted">Selecione os roteadores na Carteira e gere um lote de devolução.</p>
               </div>
             )}
 
-            {/* Modal Visualização do QR Code do Lote */}
+            {/* Modal do QR Code do Lote */}
             {activeBatchModal && (
               <div className="modal-overlay" onClick={() => setActiveBatchModal(null)}>
                 <div className="modal-box card text-center" onClick={(e) => e.stopPropagation()}>
                   <div className="modal-head">
-                    <h3>Lote {activeBatchModal.code}</h3>
-                    <button className="close-btn" onClick={() => setActiveBatchModal(null)}>
-                      ✕
-                    </button>
+                    <div>
+                      <h3>{activeBatchModal.code}</h3>
+                      <span className="badge badge-info">{activeBatchModal.status}</span>
+                    </div>
+                    <button className="close-btn" onClick={() => setActiveBatchModal(null)}>✕</button>
                   </div>
 
-                  <div className="qr-container-mobile">
+                  <div className="qr-display-box">
                     <QRCodeSVG
                       value={`newlife:batch:${activeBatchModal.id}:${activeBatchModal.code}`}
-                      size={180}
+                      size={200}
                     />
                   </div>
+
                   <p className="muted small-text">
-                    Apresente este QR Code para o estoquista bipar na central desktop.
+                    Apresente este QR Code na mesa do estoque para o conferente carregar a lista de entrega.
                   </p>
 
-                  <div className="batch-modal-stats">
-                    <p>
-                      <strong>Status:</strong> {activeBatchModal.status}
-                    </p>
-                    <p>
-                      <strong>Itens:</strong> {activeBatchModal.accepted_items} de {activeBatchModal.total_items} aceitos
-                    </p>
+                  <div className="batch-modal-summary">
+                    <div className="summary-item">
+                      <span className="label">Total Declarado</span>
+                      <strong className="val">{activeBatchModal.total_items} itens</strong>
+                    </div>
+                    <div className="summary-item">
+                      <span className="label">Conferidos</span>
+                      <strong className="val text-success">{activeBatchModal.accepted_items} itens</strong>
+                    </div>
                   </div>
 
-                  <button className="full-width" onClick={() => setActiveBatchModal(null)}>
+                  <button className="primary full-width" onClick={() => setActiveBatchModal(null)}>
                     Fechar
                   </button>
                 </div>
@@ -713,87 +841,104 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
           </div>
         )}
 
-        {/* TAB 5: FILA DE FOTOS OFFLINE */}
+        {/* ABA 5: FILA OFFLINE */}
         {navTab === 'QUEUE' && (
-          <div className="tech-queue-view">
-            <div className="section-head">
-              <div>
-                <h3>Fila de Sincronização Local</h3>
-                <p className="muted">{pendingCount} foto(s) salvas no celular.</p>
+          <div className="mobile-tab-view queue-view">
+            <div className="offline-storage-meter card">
+              <div className="meter-top-row">
+                <div>
+                  <strong>Armazenamento Local</strong>
+                  <p className="muted small-text">{usedStorageMB} MB utilizados de 320 MB</p>
+                </div>
+                <span className="meter-pill">{pendingCount} fotos pendentes</span>
               </div>
+
               <button
-                className="primary"
+                type="button"
+                className="primary mobile-big-btn full-width"
                 disabled={syncing}
                 onClick={() => void run(true)}
               >
-                {syncing ? 'Sincronizando…' : '🔄 Sincronizar Agora'}
+                {syncing ? '🔄 Enviando Fotos ao Servidor…' : '⚡ Sincronizar Agora'}
               </button>
             </div>
 
-            {captures && captures.length > 0 ? (
-              <ul className="items-list-compact">
-                {captures.map((capture) => (
-                  <li key={capture.id} className="queue-row-card card">
-                    <div className="queue-row-info">
-                      <strong className={`badge ${capture.state === 'UPLOADED' ? 'badge-success' : 'badge-warning'}`}>
-                        {capture.state === 'UPLOADED' ? 'Enviada ao Servidor' : 'Salva no Celular (Offline)'}
-                      </strong>
-                      <div className="mono small-text">
-                        {capture.barcode?.raw_value || 'Serial em processamento'}
+            <div className="queue-list-section">
+              <h3>Fotos no Celular ({captures?.length || 0})</h3>
+              {captures && captures.length > 0 ? (
+                <div className="queue-cards-stack">
+                  {captures.map((c) => (
+                    <div key={c.id} className="queue-item-card card">
+                      <div className="queue-item-main">
+                        <strong className={`badge ${c.state === 'UPLOADED' ? 'badge-success' : 'badge-warning'}`}>
+                          {c.state === 'UPLOADED' ? '✓ Enviada' : '⏳ Salva Offline'}
+                        </strong>
+                        <span className="mono queue-serial">
+                          {c.barcode?.raw_value || 'Serial em OCR'}
+                        </span>
+                        <small className="muted">{dateTime.format(new Date(c.capturedAt))}</small>
                       </div>
-                      <small className="muted">{dateTime.format(new Date(capture.capturedAt))}</small>
-                      {capture.error && <p className="alert small-text">{capture.error}</p>}
                     </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="empty-state">Nenhuma foto salva no dispositivo.</div>
-            )}
+                  ))}
+                </div>
+              ) : (
+                <div className="mobile-empty-state card">
+                  <p className="muted">Nenhuma foto no armazenamento do dispositivo.</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
-      </main>
+      </div>
 
-      {/* BOTTOM NAVIGATION BAR PARA MOBILE (Capítulo 12) */}
-      <nav className="tech-bottom-nav">
+      {/* 3. Floating Bottom Navigation Bar Estilizada */}
+      <nav className="mobile-bottom-dock">
         <button
-          className={`nav-btn ${navTab === 'HOME' ? 'active' : ''}`}
+          type="button"
+          className={`dock-btn ${navTab === 'HOME' ? 'active' : ''}`}
           onClick={() => setNavTab('HOME')}
         >
-          <span className="nav-icon">🏠</span>
-          <span className="nav-label">Início</span>
+          <span className="dock-icon">🏠</span>
+          <span className="dock-label">Início</span>
         </button>
 
         <button
-          className={`nav-btn ${navTab === 'CAPTURE' ? 'active' : ''}`}
+          type="button"
+          className={`dock-btn ${navTab === 'CAPTURE' ? 'active' : ''}`}
           onClick={() => setNavTab('CAPTURE')}
         >
-          <span className="nav-icon">📸</span>
-          <span className="nav-label">Registrar</span>
+          <span className="dock-icon">📸</span>
+          <span className="dock-label">Registrar</span>
         </button>
 
         <button
-          className={`nav-btn ${navTab === 'CARTEIRA' ? 'active' : ''}`}
+          type="button"
+          className={`dock-btn ${navTab === 'CARTEIRA' ? 'active' : ''}`}
           onClick={() => setNavTab('CARTEIRA')}
         >
-          <span className="nav-icon">💼</span>
-          <span className="nav-label">Carteira</span>
+          <span className="dock-icon">💼</span>
+          <span className="dock-label">Carteira</span>
         </button>
 
         <button
-          className={`nav-btn ${navTab === 'LOTES' ? 'active' : ''}`}
+          type="button"
+          className={`dock-btn ${navTab === 'LOTES' ? 'active' : ''}`}
           onClick={() => setNavTab('LOTES')}
         >
-          <span className="nav-icon">📋</span>
-          <span className="nav-label">Lotes</span>
+          <span className="dock-icon">📋</span>
+          <span className="dock-label">Lotes</span>
         </button>
 
         <button
-          className={`nav-btn ${navTab === 'QUEUE' ? 'active' : ''}`}
+          type="button"
+          className={`dock-btn ${navTab === 'QUEUE' ? 'active' : ''}`}
           onClick={() => setNavTab('QUEUE')}
         >
-          <span className="nav-icon">🔄</span>
-          <span className="nav-label">Fila ({pendingCount})</span>
+          <span className="dock-icon relative">
+            🔄
+            {pendingCount > 0 && <span className="dock-badge">{pendingCount}</span>}
+          </span>
+          <span className="dock-label">Fila</span>
         </button>
       </nav>
     </div>

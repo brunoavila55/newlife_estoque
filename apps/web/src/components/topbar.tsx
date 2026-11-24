@@ -8,9 +8,18 @@ interface TopbarProps {
   connected: boolean
   onNavigate: (module: DesktopModule) => void
   onQuickSearch: (query: string) => void
+  isMobilePreview?: boolean
+  onToggleMobilePreview?: () => void
 }
 
-export function Topbar({ user, connected, onNavigate, onQuickSearch }: TopbarProps) {
+export function Topbar({
+  user,
+  connected,
+  onNavigate,
+  onQuickSearch,
+  isMobilePreview,
+  onToggleMobilePreview,
+}: TopbarProps) {
   const [searchVal, setSearchVal] = useState('')
   const [showNotifMenu, setShowNotifMenu] = useState(false)
   const [activeWarehouse, setActiveWarehouse] = useState('00000000-0000-4000-8000-000000000001')
@@ -21,7 +30,6 @@ export function Topbar({ user, connected, onNavigate, onQuickSearch }: TopbarPro
   const unreadCount = notifications?.filter((n) => !n.read).length || 0
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // Atalho global Ctrl+K para focar no campo de busca
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -64,6 +72,18 @@ export function Topbar({ user, connected, onNavigate, onQuickSearch }: TopbarPro
       </div>
 
       <div className="topbar-right-controls">
+        {/* Toggle para alternar entre Desktop e Mobile Simulator */}
+        {onToggleMobilePreview && (
+          <button
+            type="button"
+            className={`small-btn ${isMobilePreview ? 'primary' : ''}`}
+            onClick={onToggleMobilePreview}
+            title="Alternar entre visual Desktop e Mobile do Técnico"
+          >
+            {isMobilePreview ? '💻 Visão Desktop' : '📱 Visão Mobile PWA'}
+          </button>
+        )}
+
         {/* Seletor de Depósito */}
         <div className="warehouse-selector-box">
           <span className="warehouse-icon">🏢</span>
