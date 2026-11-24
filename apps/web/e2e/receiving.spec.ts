@@ -36,7 +36,7 @@ test('scanner Enter ou Tab registra a leitura e a confirmação física é separ
     }
     if (path.endsWith('/items/' + equipmentId)) return route.fulfill({ json: item })
     if (path.endsWith('/confirm')) {
-      expect(request.postDataJSON()).toEqual({ equipment_id: equipmentId, scan_id: item.matched_scan_id })
+      expect(request.postDataJSON()).toEqual({ equipment_id: equipmentId, scan_id: item.matched_scan_id, inspection: { power_supply: 'ORIGINAL', cables_present: true, condition: 'GOOD' } })
       confirmations++
       item.confirmed_at = date
       return route.fulfill({ json: { equipment_id: equipmentId, scan_id: item.matched_scan_id, movement_id: id, confirmed_at: date } })
@@ -70,12 +70,18 @@ test('scanner Enter ou Tab registra a leitura e a confirmação física é separ
   await scanner.press('Enter')
   expect(confirmations).toBe(0)
   await page.getByLabel('Conferi a etiqueta e recebi o equipamento fisicamente.').check()
+  await page.getByRole('combobox', { name: 'Fonte', exact: true }).selectOption('ORIGINAL')
+  await page.getByRole('combobox', { name: 'Cabos', exact: true }).selectOption('yes')
+  await page.getByRole('combobox', { name: 'Conservação', exact: true }).selectOption('GOOD')
   await confirm.click()
   await expect(page.getByText('Recebimento confirmado.', { exact: false })).toBeVisible()
   expect(confirmations).toBe(1)
 
   await page.getByRole('combobox', { name: 'Sufixo do scanner' }).selectOption('Tab')
   await scanner.fill('desconhecido')
+  await scanner.press('Enter')
+  await expect(scanner).toHaveValue('desconhecido')
+  expect(scans).toHaveLength(1)
   await scanner.press('Tab')
   await expect(page.getByRole('status').filter({ hasText: 'Código desconhecido' })).toBeVisible()
   await page.getByRole('button', { name: 'Encerrar sessão' }).click()
@@ -85,5 +91,63 @@ test('scanner Enter ou Tab registra a leitura e a confirmação física é separ
   await close.click()
   await expect(page.getByText('Sessão encerrada', { exact: false })).toBeVisible()
   await expect(page.getByText('Justificativa do encerramento:', { exact: false })).toBeVisible()
+  await page.emulateMedia({ media: 'print' })
+  await expect(page.locator('.receipt-print li').filter({ hasText: '0001-O' })).toBeVisible()
   expect(confirmations).toBe(1)
+})
+
+test('pilha misturada encaminha cada etiqueta à sessão do técnico e exige confirmação', async ({ page }) => {
+  const confirmed: string[] = []
+  const unknown = 'AVULSO'
+  await page.route('**/api/v1/**', async route => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    const reply = (json: unknown) => route.fulfill({ json })
+    if (path.endsWith('/login')) return reply({ access_token: 'mock', expires_in: 3600,
+      user: { ...technician, role: 'warehouse_clerk' } })
+    if (path.endsWith('/receipt-technicians') || path.endsWith('/receipt-sessions')) return reply({ items: [], next_cursor: null })
+    if (path.endsWith('/receipt-lookup')) {
+      const { value } = request.postDataJSON()
+      if (value === unknown) return reply({ result: 'UNKNOWN' })
+      if (confirmed.includes(value)) return reply({ result: 'ALREADY_RECEIVED' })
+      return reply({ result: 'MATCHED', equipment_id: value, technician_id: 'tec-' + value,
+        technician_name: 'Técnico ' + value, session_id: 'sessao-' + value })
+    }
+    const match = path.match(/\/receipt-sessions\/sessao-(A|B)\/(.*)$/)
+    if (!match) return route.fulfill({ status: 404 })
+    const [, code, action] = match
+    if (action === 'scan') {
+      expect(request.postDataJSON().value).toBe(code)
+      return reply({ equipment_id: code, result: 'MATCHED' })
+    }
+    if (action === 'items/' + code) return reply({ equipment_id: code, matched_scan_id: 'leitura-' + code, confirmed_at: null })
+    if (action === 'confirm') {
+      expect(request.postDataJSON()).toEqual({ equipment_id: code, scan_id: 'leitura-' + code, inspection: { power_supply: 'ORIGINAL', cables_present: true, condition: 'GOOD' } })
+      confirmed.push(code)
+      return reply({})
+    }
+    return route.fulfill({ status: 404 })
+  })
+  await page.goto('/')
+  await page.getByLabel('Login').fill('estoquista')
+  await page.getByLabel('Senha').fill('senha-de-teste-local')
+  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
+  const field = page.getByLabel('Serial ou MAC da etiqueta')
+  for (const code of ['B', 'A']) {
+    await field.fill(code)
+    await field.press('Tab')
+    await expect(page.getByText('Técnico ' + code, { exact: false })).toBeVisible()
+    expect(confirmed).not.toContain(code)
+    await page.getByRole('combobox', { name: 'Fonte', exact: true }).selectOption('ORIGINAL')
+    await page.getByRole('combobox', { name: 'Cabos', exact: true }).selectOption('yes')
+    await page.getByRole('combobox', { name: 'Conservação', exact: true }).selectOption('GOOD')
+    await page.getByRole('button', { name: 'Confirmar entrega física' }).click()
+    await expect(field).toBeFocused()
+  }
+  for (const [code, message] of [['A', 'já recebido'], [unknown, 'desconhecido']]) {
+    await field.fill(code)
+    await field.press('Enter')
+    await expect(page.getByRole('status').filter({ hasText: message })).toBeVisible()
+  }
+  expect(confirmed).toEqual(['B', 'A'])
 })

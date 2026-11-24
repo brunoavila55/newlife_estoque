@@ -1086,6 +1086,31 @@ async fn receipt_scopes_scans_and_transfers_custody_once_under_concurrency(db: P
     assert_eq!(technicians.0, StatusCode::OK, "{}", technicians.1);
     assert_eq!(technicians.1["items"][0]["id"], other.to_string());
 
+    let lookup = "/api/v1/receipt-lookup";
+    let queue = "/api/v1/receipt-exceptions";
+    let label = json!({"value":"PENDENTE-001"});
+    for _ in 0..2 {
+        let (status, result) = call(&app, "POST", lookup, Some(access(&left)), label.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        assert_eq!(result["result"], "UNKNOWN");
+    }
+    let (_, mine) = call(&app, "GET", queue, Some(access(&left)), Value::Null).await;
+    assert_eq!(mine["items"].as_array().unwrap().len(), 1);
+    let (_, theirs) = call(&app, "GET", queue, Some(access(&right)), Value::Null).await;
+    assert!(theirs["items"].as_array().unwrap().is_empty());
+    identify_fixture(
+        &db,
+        &app,
+        &admin,
+        other,
+        json!([{"kind":"SERIAL","raw_value":"PENDENTE-001"}]),
+    )
+    .await;
+    let (_, found) = call(&app, "POST", lookup, Some(access(&left)), label).await;
+    assert_eq!(found["technician_id"], other.to_string());
+    let (_, mine) = call(&app, "GET", queue, Some(access(&left)), Value::Null).await;
+    assert!(mine["items"].as_array().unwrap().is_empty());
+
     let left_id = Uuid::new_v4();
     let right_id = Uuid::new_v4();
     let first = format!("{sessions}/{left_id}");
@@ -1251,8 +1276,8 @@ async fn receipt_scopes_scans_and_transfers_custody_once_under_concurrency(db: P
 
     let left_confirm = format!("{first}/confirm");
     let right_confirm = format!("{second}/confirm");
-    let left_input = json!({"equipment_id":equipment,"scan_id":left_scan_id});
-    let right_input = json!({"equipment_id":equipment,"scan_id":right_scan_id});
+    let left_input = json!({"equipment_id":equipment,"scan_id":left_scan_id,"inspection":{"power_supply":"ORIGINAL","cables_present":true,"condition":"GOOD"}});
+    let right_input = json!({"equipment_id":equipment,"scan_id":right_scan_id,"inspection":{"power_supply":"ORIGINAL","cables_present":true,"condition":"GOOD"}});
     assert_eq!(
         call(
             &app,
@@ -1313,6 +1338,24 @@ async fn receipt_scopes_scans_and_transfers_custody_once_under_concurrency(db: P
             .await
             .unwrap();
     assert_eq!((moves, events), (1, 1));
+    let inspected: Value = sqlx::query_scalar(
+        "SELECT inspection FROM receipt_items WHERE equipment_id = $1 AND confirmed_at IS NOT NULL",
+    )
+    .bind(equipment)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(inspected, winning_input["inspection"]);
+    let history = call(
+        &app,
+        "GET",
+        "/api/v1/warehouse/equipment/lookup?value=0001-O",
+        Some(access(winner)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(history.0, StatusCode::OK);
+    assert_eq!(history.1["history"][0]["type"], "WAREHOUSE_RECEIVED");
     let inventory = call(
         &app,
         "GET",

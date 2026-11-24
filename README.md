@@ -56,6 +56,8 @@ Com o cursor em **Código lido**, use um scanner USB ou Bluetooth no modo teclad
 
 Quando o painel localizar um item, confira os identificadores e, se necessário, abra a foto da etiqueta. Marque a conferência física e confirme o recebimento. O equipamento só sai do estoque do técnico após a confirmação do servidor. A sessão conserva a lista de previstos, confirmados, faltantes, leituras duplicadas e divergências. Encerrar com faltantes ou divergências exige justificativa. Itens sem identificação verificável ficam pendentes.
 
+Em **Receber pilha**, uma etiqueta desconhecida pode apontar para coletas ainda em revisão. O administrador pode abrir a coleta pela referência informada no balcão e comparar a foto original. Após a validação, consulte o código novamente. Em cada entrega, informe fonte, cabos e conservação. O comprovante impresso inclui os identificadores de todos os itens da sessão, inclusive faltantes. Os módulos de saldos, busca de equipamento e sessões permitem consultar a custódia e o histórico.
+
 ## Testes
 
 Com o PostgreSQL local ativo e as variáveis de `.env` exportadas, execute:

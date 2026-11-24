@@ -7,11 +7,11 @@ export default defineConfig({
   timeout: 60_000,
   use: {
     ...devices['Desktop Chrome'],
-    baseURL: 'http://localhost:4173',
+    baseURL: 'http://127.0.0.1:4173',
     launchOptions: executablePath ? { executablePath } : undefined,
   },
   webServer: {
-    command: 'npm run preview -- --host localhost --port 4173 --strictPort',
-    url: 'http://localhost:4173',
+    command: 'node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4173 --strictPort',
+    url: 'http://127.0.0.1:4173',
   },
 })

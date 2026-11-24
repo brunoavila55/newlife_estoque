@@ -97,8 +97,8 @@ pub async fn technicians(
         return Err(ApiError::invalid("Busca inválida."));
     }
     let limit = limit(query.limit)? as usize;
-    let mut users: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, name, login FROM users WHERE role = 'technician'
+    let mut users: Vec<(Uuid, String, String, i64)> = sqlx::query_as(
+        "SELECT id, name, login, (SELECT count(*) FROM equipment WHERE technician_id = users.id) AS pending_count FROM users WHERE role = 'technician'
             AND ($2::uuid IS NULL OR id > $2)
             AND ($1 = '' OR strpos(lower(name), lower($1)) > 0 OR strpos(login, lower($1)) > 0)
          ORDER BY id LIMIT $3",
@@ -113,7 +113,7 @@ pub async fn technicians(
     let cursor = users.last().filter(|_| more).map(|row| row.0);
     let items: Vec<_> = users
         .into_iter()
-        .map(|(id, name, login)| json!({"id":id,"name":name,"login":login}))
+        .map(|(id, name, login, pending_count)| json!({"id":id,"name":name,"login":login,"pending_count":pending_count}))
         .collect();
     tx.commit().await?;
     Ok(Json(json!({"items":items,"next_cursor":cursor})))
@@ -306,6 +306,116 @@ async fn resolve(
     Ok(Ok(equipment))
 }
 
+#[derive(Deserialize)]
+pub struct LookupInput {
+    value: String,
+}
+
+#[derive(Deserialize)]
+pub struct ExceptionQuery {
+    after: Option<String>,
+}
+
+pub async fn exceptions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<ExceptionQuery>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let (mut tx, actor) = authorize_receive(&state, &headers).await?;
+    let query = checked_query(query)?;
+    let mut rows: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT value, result, seen_at FROM receipt_exceptions WHERE clerk_id = $1 AND warehouse_id = $2
+         AND resolved_at IS NULL AND ($3::text IS NULL OR value > $3) ORDER BY value LIMIT 26"
+    ).bind(actor).bind(PILOT_WAREHOUSE).bind(query.after).fetch_all(&mut *tx).await?;
+    let more = rows.len() > 25;
+    rows.truncate(25);
+    let cursor = rows.last().filter(|_| more).map(|row| row.0.clone());
+    let items: Vec<_> = rows
+        .into_iter()
+        .map(
+            |(value, result, seen_at)| json!({ "value":value, "result":result, "seen_at":seen_at }),
+        )
+        .collect();
+    tx.commit().await?;
+    Ok(Json(json!({"items":items,"next_cursor":cursor})))
+}
+
+pub async fn trace_equipment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(input): Query<LookupInput>,
+) -> Result<Json<Value>, ApiError> {
+    let (mut tx, _) = authorize_receive(&state, &headers).await?;
+    let id = match resolve(&mut tx, validated_code(&input.value)?, None).await? {
+        Ok(id) => id,
+        Err(result) => return Ok(Json(json!({"result":result}))),
+    };
+    let history: Vec<Value> = sqlx::query_scalar(
+        "SELECT jsonb_build_object('type',m.movement_type,'at',m.occurred_at,'holder',coalesce(u.name,l.name))
+         FROM custody_movements m LEFT JOIN users u ON u.id = m.to_technician_id
+         LEFT JOIN locations l ON l.id = m.to_warehouse_id
+         WHERE m.equipment_id = $1 ORDER BY m.occurred_at DESC, m.id DESC"
+    ).bind(id).fetch_all(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Json(json!({"result":"MATCHED","history":history})))
+}
+
+pub async fn lookup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Body(input): Body<LookupInput>,
+) -> Result<Json<Value>, ApiError> {
+    let (mut tx, actor) = authorize_receive(&state, &headers).await?;
+    let value = validated_code(&input.value)?;
+    let response = match resolve(&mut tx, value, None).await? {
+        Err(result) => {
+            sqlx::query("INSERT INTO receipt_exceptions (clerk_id, warehouse_id, value, result) VALUES ($1,$2,$3,$4)
+                ON CONFLICT (clerk_id, warehouse_id, value) DO UPDATE SET result = EXCLUDED.result, seen_at = now(), resolved_at = NULL")
+                .bind(actor).bind(PILOT_WAREHOUSE).bind(value).bind(result).execute(&mut *tx).await?;
+            let pending: Vec<(Uuid, String)> = sqlx::query_as(
+                "SELECT c.id, u.name FROM captures c JOIN users u ON u.id = c.technician_id
+                 JOIN LATERAL (SELECT suggestions FROM ocr_results WHERE capture_id = c.id
+                   ORDER BY created_at DESC, id DESC LIMIT 1) o ON TRUE
+                 WHERE c.status = 'NEEDS_REVIEW' AND EXISTS (
+                   SELECT 1 FROM jsonb_array_elements(o.suggestions) s
+                   WHERE (s->>'kind' = 'SERIAL' AND s->>'normalized_value' = $1)
+                      OR (s->>'kind' = 'MAC' AND s->>'normalized_value' = $2))
+                 ORDER BY c.received_at_server DESC, c.id LIMIT 10",
+            )
+            .bind(normalize_serial(value))
+            .bind(normalize_mac(value).ok())
+            .fetch_all(&mut *tx)
+            .await?;
+            let candidates: Vec<_> = pending
+                .into_iter()
+                .map(|(id, name)| json!({"capture_id":id,"technician_name":name}))
+                .collect();
+            json!({"result": result,"review_candidates":candidates})
+        }
+        Ok(id) => {
+            sqlx::query("UPDATE receipt_exceptions SET resolved_at = now() WHERE clerk_id = $1 AND warehouse_id = $2 AND value = $3 AND resolved_at IS NULL")
+                .bind(actor).bind(PILOT_WAREHOUSE).bind(value).execute(&mut *tx).await?;
+            let owner: Option<(Uuid, String)> = sqlx::query_as(
+                "SELECT u.id, u.name FROM equipment e JOIN users u ON u.id = e.technician_id WHERE e.id = $1",
+            ).bind(id).fetch_optional(&mut *tx).await?;
+            if let Some((technician, name)) = owner {
+                let session: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT s.id FROM receipt_sessions s JOIN receipt_items i ON i.session_id = s.id
+                     WHERE s.clerk_id = $1 AND s.warehouse_id = $2 AND s.technician_id = $3
+                       AND s.closed_at IS NULL AND i.equipment_id = $4
+                     ORDER BY s.opened_at DESC, s.id DESC LIMIT 1",
+                ).bind(actor).bind(PILOT_WAREHOUSE).bind(technician).bind(id)
+                 .fetch_optional(&mut *tx).await?;
+                json!({"result":"MATCHED","equipment_id":id,"technician_id":technician,"technician_name":name,"session_id":session})
+            } else {
+                json!({"result":"ALREADY_RECEIVED"})
+            }
+        }
+    };
+    tx.commit().await?;
+    Ok(Json(response))
+}
+
 async fn classify(
     db: &mut PgConnection,
     session: &Session,
@@ -390,6 +500,30 @@ pub async fn scan(
 pub struct ConfirmInput {
     equipment_id: Uuid,
     scan_id: Uuid,
+    inspection: Inspection,
+}
+
+#[derive(Deserialize, Serialize)]
+struct Inspection {
+    power_supply: PowerSupply,
+    cables_present: bool,
+    condition: Condition,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum PowerSupply {
+    Original,
+    Replacement,
+    Missing,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum Condition {
+    Good,
+    Damaged,
+    Inoperative,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -471,12 +605,13 @@ pub async fn confirm(
     }
 
     let confirmed_at: DateTime<Utc> = sqlx::query_scalar(
-        "UPDATE receipt_items SET confirmed_scan_id = $1, confirmed_at = now()
+        "UPDATE receipt_items SET confirmed_scan_id = $1, confirmed_at = now(), inspection = $4
          WHERE session_id = $2 AND equipment_id = $3 RETURNING confirmed_at",
     )
     .bind(input.scan_id)
     .bind(session.id)
     .bind(input.equipment_id)
+    .bind(json!(input.inspection))
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query("UPDATE equipment SET technician_id = NULL, warehouse_id = $1 WHERE id = $2")
@@ -493,7 +628,7 @@ pub async fn confirm(
         .bind(session.warehouse_id).bind(actor).bind(session.id).bind(input.scan_id).execute(&mut *tx).await?;
     audit(&mut tx, actor, "WAREHOUSE_RECEIVED", "equipment", input.equipment_id,
         Some(json!({"technician_id":session.technician_id})),
-        json!({"warehouse_id":session.warehouse_id,"movement_id":movement_id,"session_id":session.id,"scan_id":input.scan_id})).await?;
+        json!({"warehouse_id":session.warehouse_id,"movement_id":movement_id,"session_id":session.id,"scan_id":input.scan_id,"inspection":input.inspection})).await?;
     tx.commit().await?;
     Ok(Json(json!(Confirmation {
         movement_id,
@@ -535,6 +670,7 @@ struct Item {
     matched_scan_id: Option<Uuid>,
     confirmed_at: Option<DateTime<Utc>>,
     identifiers: Value,
+    inspection: Option<Value>,
 }
 
 async fn list_items(
@@ -545,7 +681,7 @@ async fn list_items(
     limit: i64,
 ) -> Result<Vec<Item>, ApiError> {
     Ok(sqlx::query_as(
-        "SELECT i.equipment_id, i.confirmed_at, s.id AS matched_scan_id,
+        "SELECT i.equipment_id, i.confirmed_at, i.inspection, s.id AS matched_scan_id,
             COALESCE((SELECT jsonb_agg(jsonb_build_object('kind', kind, 'raw_value', raw_value)
               ORDER BY kind, normalized_value) FROM equipment_identifiers WHERE equipment_id = i.equipment_id), '[]'::jsonb) AS identifiers
          FROM receipt_items i LEFT JOIN receipt_scans s ON s.session_id = i.session_id

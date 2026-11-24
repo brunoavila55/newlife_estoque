@@ -228,3 +228,16 @@ input[type="checkbox"] { accent-color: var(--blue); width: 1.125rem; height: 1.1
 @media (prefers-reduced-motion: reduce) {
   button { transition: none; }
 }
+
+.desk-modules { grid-column: 1 / -1; display: flex; gap: .5rem; flex-wrap: wrap; }
+.desk-modules button[aria-pressed=true] { background: #10213a; color: white; }
+.receipt-print { display: none; }
+@media print {
+  body:has(.receipt-print) *:not(:has(.receipt-print), .receipt-print, .receipt-print *) { display: none !important; }
+  body:has(.receipt-print), body:has(.receipt-print) *:has(.receipt-print) {
+    display: block; background: white; margin: 0; padding: 0; width: auto; min-height: 0; box-shadow: none;
+  }
+  .receipt-print { display: block; color: black; padding: 12mm; }
+  .receipt-print dt { margin-top: 0.6em; font-weight: bold; }
+  .receipt-print dd { margin-left: 0; }
+}

@@ -581,6 +581,83 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-exceptions:
+    get:
+      operationId: listReceiptExceptions
+      summary: Listar etiquetas ainda sem identificação única do estoquista atual
+      parameters:
+        - name: after
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Página de até 25 pendências com código, resultado, horário e cursor next_cursor
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/warehouse/equipment/lookup:
+    get:
+      operationId: traceWarehouseEquipment
+      summary: Consultar a custódia por serial ou MAC no depósito piloto
+      parameters:
+        - name: value
+          in: query
+          required: true
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Resultado da busca e movimentos do mais recente ao mais antigo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result]
+                properties:
+                  result: { type: string, enum: [MATCHED, AMBIGUOUS, UNKNOWN] }
+                  history:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string }
+                        at: { type: string, format: date-time }
+                        holder: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/receipt-lookup:
+    post:
+      operationId: lookupReceiptEquipment
+      summary: Localizar o responsável por uma etiqueta na mesa de recebimento
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Correspondência e sessão aberta compatível do estoquista, quando disponível
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result]
+                properties:
+                  result: { type: string, enum: [MATCHED, UNKNOWN, AMBIGUOUS, ALREADY_RECEIVED] }
+                  review_candidates:
+                    type: array
+                    maxItems: 10
+                    items:
+                      type: object
+                      required: [capture_id, technician_name]
+                      properties:
+                        capture_id: { type: string, format: uuid }
+                        technician_name: { type: string }
+                  equipment_id: { type: string, format: uuid }
+                  technician_id: { type: string, format: uuid }
+                  technician_name: { type: string }
+                  session_id: { type: [string, 'null'], format: uuid }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/receipt-technicians:
     get:
       operationId: listReceiptTechnicians
@@ -726,10 +803,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [equipment_id, scan_id]
+              required: [equipment_id, scan_id, inspection]
               properties:
                 equipment_id: { type: string, format: uuid }
                 scan_id: { type: string, format: uuid }
+                inspection: { $ref: '#/components/schemas/ReceiptInspection' }
       responses:
         '200':
           description: Movimento e confirmação persistidos
@@ -913,11 +991,22 @@ components:
         missing: { type: integer, minimum: 0 }
         duplicates: { type: integer, minimum: 0 }
         divergences: { type: integer, minimum: 0 }
+    ReceiptInspection:
+      type: object
+      required: [power_supply, cables_present, condition]
+      properties:
+        power_supply: { type: string, enum: [ORIGINAL, REPLACEMENT, MISSING] }
+        cables_present: { type: boolean }
+        condition: { type: string, enum: [GOOD, DAMAGED, INOPERATIVE] }
     ReceiptItem:
       type: object
       required: [equipment_id, matched_scan_id, confirmed_at, identifiers]
       properties:
         equipment_id: { type: string, format: uuid }
+        inspection:
+          oneOf:
+            - { $ref: '#/components/schemas/ReceiptInspection' }
+            - { type: 'null' }
         matched_scan_id: { type: [string, 'null'], format: uuid }
         confirmed_at: { type: [string, 'null'], format: date-time }
         identifiers:

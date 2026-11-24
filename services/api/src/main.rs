@@ -140,6 +140,12 @@ fn router(state: AppState) -> Router {
                 captures::MAX_IMAGE_BYTES,
             )),
         )
+        .route("/api/v1/receipt-exceptions", get(receipts::exceptions))
+        .route("/api/v1/receipt-lookup", post(receipts::lookup))
+        .route(
+            "/api/v1/warehouse/equipment/lookup",
+            get(receipts::trace_equipment),
+        )
         .route("/api/v1/receipt-technicians", get(receipts::technicians))
         .route(
             "/api/v1/receipt-sessions",

@@ -152,6 +152,40 @@ test('lê código por ZXing offline e aceita preenchimento manual', async ({ pag
   await expect(page.getByText('2 pendente(s)', { exact: true })).toBeVisible()
 })
 
+test('lê pela câmera, confirma a foto offline e libera o dispositivo', async ({ page, context }) => {
+  await context.addInitScript(() => {
+    Object.defineProperty(window, 'BarcodeDetector', { configurable: true, value: class {
+      async detect() { return [{ rawValue: 'SN-00042' }] }
+    } })
+    navigator.mediaDevices.getUserMedia = async () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 640
+      canvas.height = 480
+      const stream = canvas.captureStream(5)
+      const draw = () => canvas.getContext('2d')!.fillRect(0, 0, 640, 480)
+      const timer = setInterval(() => {
+        if (stream.active) draw()
+        else clearInterval(timer)
+      }, 150)
+      return stream
+    }
+  })
+  await context.route('**/api/v1/auth/web/**', route =>
+    route.fulfill({ json: { access_token: 'mock', expires_in: 3600, user: technician } }))
+  await page.goto('/')
+  await signIn(page)
+  await context.setOffline(true)
+  await page.getByRole('button', { name: 'Abrir câmera com leitor' }).click()
+  await expect(page.getByText('Código na câmera: SN-00042')).toBeVisible()
+  const track = await page.locator('video').evaluateHandle(video => (video.srcObject as MediaStream).getVideoTracks()[0])
+  await page.getByRole('button', { name: 'Fotografar etiqueta' }).click()
+  await expect(page.getByText('Código na foto: SN-00042')).toBeVisible()
+  await expect.poll(() => track.evaluate(t => t.readyState)).toBe('ended')
+  await page.getByRole('button', { name: 'Salvar coleta' }).click()
+  await expect(page.getByText('Código informado: SN-00042')).toBeVisible()
+  await expect(page.getByText('1 pendente(s)', { exact: true })).toBeVisible()
+})
+
 test('preserva a foto pendente depois de atualizar o Service Worker', async ({ page, context }) => {
   let revision = 1
   const types: Record<string, string> = {

@@ -5,6 +5,8 @@ import { registerSW } from 'virtual:pwa-register'
 import { ApiError, clearAccess, enter, leave, lockDevice, resumeSession } from './api'
 import { db, freeSpace, removeExpiredPhotos, storePhoto, type Capture, type Profile, type User } from './db'
 import { preparePhoto, readBarcode, validBarcode } from './photo'
+import { LabelCamera } from './label-camera'
+import type { BarcodeEvidence } from './db'
 import { AdminDesk } from './users'
 import { InventoryPanel } from './inventory'
 import { ReceivingDesk } from './receiving'
@@ -65,6 +67,28 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
   </section>
 }
 
+function LocalPhoto({ capture }: { capture: Capture }) {
+  const [visible, setVisible] = useState(false)
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    if (!visible) return
+    let active = true
+    let objectUrl = ''
+    void db.photos.get(capture.id).then(photo => {
+      if (active && photo) {
+        objectUrl = URL.createObjectURL(photo.blob)
+        setUrl(objectUrl)
+      }
+    }).catch(() => {})
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [capture.id, visible])
+  return <details onToggle={event => { setVisible(event.currentTarget.open); setUrl('') }}>
+    <summary>Ver foto da coleta</summary>
+    {visible && (url ? <img className="review-photo" src={url} alt="Etiqueta fotografada nesta coleta" /> :
+      <small>Prévia local indisponível.</small>)}
+  </details>
+}
+
 function captureLabel(capture: Capture): string {
   if (capture.state === 'UPLOADING') return 'Enviando'
   if (capture.state === 'ACTION_REQUIRED') return 'Ação necessária'
@@ -93,6 +117,7 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
   const [checking, setChecking] = useState<string>()
   const [barcode, setBarcode] = useState('')
   const [scanBarcode, setScanBarcode] = useState(false)
+  const [liveCamera, setLiveCamera] = useState(false)
   const camera = useRef<HTMLInputElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const captures = useLiveQuery(async () => (await db.captures.where('owner').equals(profile.id).sortBy('capturedAt')).reverse(),
@@ -105,8 +130,8 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
 
   useEffect(() => { void checkSpace() }, [checkSpace])
 
-  async function save(file?: File) {
-    if (!file) return
+  async function save(file?: File, live?: { evidence?: BarcodeEvidence }) {
+    if (!file) return false
     const capturedAt = new Date().toISOString()
     setNotice('')
     setSuccess('')
@@ -114,16 +139,18 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
     try {
       void navigator.storage?.persist?.().catch(() => false)
       const photo = await preparePhoto(file)
-      const manual = barcode.trim()
+      const manual = live ? '' : barcode.trim()
       if (manual && !validBarcode(manual)) throw new Error('Use um código de até 128 bytes.')
-      const evidence = manual ? { raw_value: manual, source: 'MANUAL' as const }
+      const evidence = live ? live.evidence : manual ? { raw_value: manual, source: 'MANUAL' as const }
         : scanBarcode ? await readBarcode(photo) : undefined
       await storePhoto(profile.id, photo, capturedAt, evidence)
       setBarcode('')
       setSuccess(scanBarcode && !evidence ? 'Foto salva. Nenhum código legível foi encontrado.' : 'Foto salva no dispositivo.')
       void run(false)
+      return true
     } catch (error) {
       setNotice(message(error))
+      return false
     } finally {
       setSaving(false)
       void checkSpace()
@@ -170,12 +197,14 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
       <section className="card capture-card">
         <h2>Fotografar etiqueta</h2>
         <p>Enquadre a etiqueta inteira e confira se o serial e os MACs estão legíveis.</p>
-        <div className="actions capture-actions">
+        {liveCamera ? <LabelCamera close={() => setLiveCamera(false)}
+          fallback={() => { setLiveCamera(false); camera.current?.click() }}
+          save={(file, evidence) => save(file, { evidence })} /> : <div className="actions capture-actions">
           <button className="primary" disabled={saving || leaving}
-            onClick={() => camera.current?.click()}><span className="camera-mark" aria-hidden="true" />Abrir câmera</button>
+            onClick={() => typeof navigator.mediaDevices?.getUserMedia === 'function' ? setLiveCamera(true) : camera.current?.click()}><span className="camera-mark" aria-hidden="true" />Abrir câmera com leitor</button>
           <button disabled={saving || leaving} onClick={() => picker.current?.click()}>Escolher foto</button>
-        </div>
-        <details>
+        </div>}
+        <details hidden={liveCamera}>
           <summary>Código da etiqueta (opcional)</summary>
           <label className="field">Digitar código<input value={barcode} disabled={saving} onChange={(event) => setBarcode(event.target.value)} maxLength={128} /></label>
           <label className="check"><input type="checkbox" checked={scanBarcode} disabled={saving || !!barcode.trim()}
@@ -196,11 +225,13 @@ function Desk({ profile, deny, syncing, run, leaveDesk }: {
             {syncing ? 'Sincronizando…' : 'Sincronizar agora'}
           </button>
         </div>
+        {!!captures?.length && <p>Última situação consultada: {captures.filter(c => c.remoteStatus === 'NEEDS_REVIEW').length} em revisão · {captures.filter(c => c.remoteStatus === 'IDENTIFIED').length} identificadas.</p>}
         {captures?.length === 0 && <p className="empty-state">Nenhuma foto registrada neste dispositivo.</p>}
         {!!captures?.length && <ul className="items">{captures.map((capture) => <li key={capture.id} className="queue-row">
           <div><strong className="status-label" data-state={capture.error ? 'ERROR' : capture.remoteStatus ?? capture.state}>{captureLabel(capture)}</strong><br /><time dateTime={capture.capturedAt}>{dateTime.format(new Date(capture.capturedAt))}</time>
             {capture.lastAttemptAt && capture.state !== 'UPLOADED' && <p className="muted">Última tentativa em {dateTime.format(capture.lastAttemptAt)}</p>}
             {capture.barcode && <p className="muted">Código informado: {capture.barcode.raw_value}</p>}
+            <LocalPhoto capture={capture} />
             {capture.error && <p className="alert">{capture.error}</p>}</div>
           {capture.remoteId && <button disabled={checking !== undefined || leaving}
             onClick={() => void check(capture)}>{checking === capture.id ? 'Consultando…' : 'Consultar status'}</button>}

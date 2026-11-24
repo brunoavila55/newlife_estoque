@@ -105,6 +105,13 @@ export function ReviewDesk({ admin, denied }: { admin: User; denied: () => void 
         </select></label>
         <button disabled={busy} onClick={() => void load()}>Atualizar lista</button>
       </div>
+      <form className="receipt-form" onSubmit={event => {
+        event.preventDefault()
+        setSelection(String(new FormData(event.currentTarget).get('capture')).trim())
+      }}>
+        <label>Referência da coleta no balcão<input name="capture" required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" /></label>
+        <button>Abrir pela referência</button>
+      </form>
       {busy && !page && <p role="status">Consultando capturas…</p>}
       {page?.items.length === 0 && <p>Nenhuma captura neste filtro.</p>}
       {!!page?.items.length && <ul className="items">{page.items.map((capture) =>

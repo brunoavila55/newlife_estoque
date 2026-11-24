@@ -43,6 +43,24 @@ export async function preparePhoto(file: File): Promise<Blob> {
 type DetectedCode = { rawValue: string }
 type Detector = new () => { detect(image: ImageBitmapSource): Promise<DetectedCode[]> }
 
+export async function readFrame(canvas: HTMLCanvasElement): Promise<import('./db').BarcodeEvidence | undefined> {
+  const NativeDetector = (window as Window & { BarcodeDetector?: Detector }).BarcodeDetector
+  if (NativeDetector) {
+    try {
+      const codes = await new NativeDetector().detect(canvas)
+      if (codes.length > 1) return
+      if (codes.length && validBarcode(codes[0].rawValue)) {
+        return { raw_value: codes[0].rawValue, source: 'BARCODE_DETECTOR' }
+      }
+    } catch { /* Alguns navegadores expõem a API sem implementar a leitura. */ }
+  }
+  try {
+    const { BrowserMultiFormatReader } = await import('@zxing/browser')
+    const raw = new BrowserMultiFormatReader().decodeFromCanvas(canvas).getText()
+    if (validBarcode(raw)) return { raw_value: raw, source: 'ZXING' }
+  } catch { /* Quadro sem leitura. */ }
+}
+
 export async function readBarcode(photo: Blob): Promise<import('./db').BarcodeEvidence | undefined> {
   const url = URL.createObjectURL(photo)
   try {
@@ -56,17 +74,7 @@ export async function readBarcode(photo: Blob): Promise<import('./db').BarcodeEv
     const context = canvas.getContext('2d')
     if (!context) return
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
-    const BarcodeDetector = (window as Window & { BarcodeDetector?: Detector }).BarcodeDetector
-    if (BarcodeDetector) {
-      const codes = await new BarcodeDetector().detect(canvas).catch(() => [])
-      if (codes.length > 1) return
-      if (codes.length === 1 && validBarcode(codes[0].rawValue)) {
-        return { raw_value: codes[0].rawValue, source: 'BARCODE_DETECTOR' }
-      }
-    }
-    const { BrowserMultiFormatReader } = await import('@zxing/browser')
-    const raw = new BrowserMultiFormatReader().decodeFromCanvas(canvas).getText()
-    if (validBarcode(raw)) return { raw_value: raw, source: 'ZXING' }
+    return await readFrame(canvas)
   } catch {
     // A leitura local é complementar. A foto permanece utilizável.
   } finally {

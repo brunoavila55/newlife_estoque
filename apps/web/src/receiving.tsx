@@ -7,7 +7,28 @@ type Session = {
   warehouse_name: string; opened_at: string; closed_at: string | null; closing_reason: string | null
 }
 type Identifier = { kind: string; raw_value: string }
-type Item = { equipment_id: string; matched_scan_id: string | null; confirmed_at: string | null; identifiers: Identifier[] }
+const supplies = { ORIGINAL: 'Original', REPLACEMENT: 'Paralela', MISSING: 'Ausente' }
+const conditions = { GOOD: 'Bom', DAMAGED: 'Avariado', INOPERATIVE: 'Inoperante' }
+type Inspection = { power_supply: keyof typeof supplies; condition: keyof typeof conditions; cables_present: boolean }
+
+function InspectionForm({ busy, label, submit }: { busy: boolean; label: string; submit: (inspection: Inspection) => void }) {
+  return <form className="receipt-form" onSubmit={event => {
+    event.preventDefault()
+    if (busy) return
+    const data = new FormData(event.currentTarget)
+    submit({ power_supply: data.get('power') as Inspection['power_supply'],
+      condition: data.get('condition') as Inspection['condition'], cables_present: data.get('cables') === 'yes' })
+  }}>
+    <label>Fonte<select name="power" autoFocus required defaultValue=""><option value="">Selecione</option>
+      {Object.entries(supplies).map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select></label>
+    <label>Cabos<select name="cables" required defaultValue=""><option value="">Selecione</option>
+      <option value="yes">Presentes</option><option value="no">Ausentes</option></select></label>
+    <label>Conservação<select name="condition" required defaultValue=""><option value="">Selecione</option>
+      {Object.entries(conditions).map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select></label>
+    <button className="primary" disabled={busy} accessKey="r">{label}</button>
+  </form>
+}
+type Item = { equipment_id: string; matched_scan_id: string | null; confirmed_at: string | null; identifiers: Identifier[]; inspection?: Inspection | null }
 type Scan = {
   id: string; equipment_id: string | null; result: string; value: string
   secondary_value: string | null; created_at: string
@@ -15,7 +36,7 @@ type Scan = {
 type Totals = { expected: number; confirmed: number; missing: number; duplicates: number; divergences: number }
 type Detail = { session: Session; totals: Totals; items: Item[]; scans: Scan[]; next_item: string | null; next_scan: string | null }
 type Page<T> = { items: T[]; next_cursor: string | null }
-type Technician = { id: string; name: string; login: string }
+type Technician = { id: string; name: string; login: string; pending_count?: number }
 
 const dateTime = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
 const outcomes: Record<string, string> = {
@@ -30,6 +51,28 @@ const outcomes: Record<string, string> = {
 }
 const kinds: Record<string, string> = { SERIAL: 'Serial', MAC: 'MAC', BARCODE: 'Código' }
 
+let scannerAudio: AudioContext | undefined
+function enableScannerAudio() {
+  try {
+    scannerAudio ??= new AudioContext()
+    void scannerAudio.resume().catch(() => {})
+  } catch { /* O resultado também aparece na tela. */ }
+}
+function signal(result: string) {
+  if (scannerAudio?.state !== 'running') return
+  const tone = scannerAudio.createOscillator()
+  const gain = scannerAudio.createGain()
+  const start = scannerAudio.currentTime
+  const duplicate = result === 'DUPLICATE_SCAN' || result === 'ALREADY_RECEIVED'
+  tone.frequency.value = result === 'MATCHED' ? 880 : duplicate ? 520 : 240
+  tone.type = duplicate ? 'triangle' : 'sine'
+  gain.gain.setValueAtTime(.08, start)
+  gain.gain.exponentialRampToValueAtTime(.001, start + .16)
+  tone.connect(gain).connect(scannerAudio.destination)
+  tone.start(start)
+  tone.stop(start + .17)
+}
+
 function jsonPost(body: object): RequestInit {
   return { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
 }
@@ -40,6 +83,7 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
   const [search, setSearch] = useState('')
   const [searched, setSearched] = useState('')
   const [selected, setSelected] = useState<string>()
+  const [module, setModule] = useState<'receive' | 'balances' | 'history' | 'lookup'>('receive')
   const [technician, setTechnician] = useState('')
   const [opening, setOpening] = useState(false)
   const [findingTechnicians, setFindingTechnicians] = useState(false)
@@ -110,10 +154,18 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
       <button onClick={() => void exit().catch((failure) => setError(fail(failure)))}>Sair</button>
     </div>
     {error && <p className="alert" role="alert">{error}</p>}
-    {selected ? <ReceiptSession key={selected} owner={clerk.id} id={selected} fail={fail}
-      back={() => { setSelected(undefined); void loadSessions() }} /> : <div className="desk-grid">
-      <section className="card task-panel">
-        <h2>Abrir recebimento</h2>
+    {selected ? <ReceiptSession key={selected} owner={clerk.id} clerkName={clerk.name} id={selected} fail={fail}
+      back={() => { setSelected(undefined); void loadSessions(); void loadTechnicians(searched) }} /> : <div className="desk-grid">
+      <nav className="desk-modules" aria-label="Área do estoque">
+        {([['receive', 'Receber pilha'], ['balances', 'Saldos por técnico'], ['lookup', 'Buscar equipamento'], ['history', 'Sessões e comprovantes']] as const).map(([key, title]) =>
+          <button key={key} aria-pressed={module === key} onClick={() => setModule(key)}>{title}</button>)}
+      </nav>
+      <div hidden={module !== 'receive'}><MixedDesk owner={clerk.id} fail={fail} refresh={() => { void loadSessions(); void loadTechnicians(searched) }} /></div>
+      {module === 'lookup' && <EquipmentSearch owner={clerk.id} fail={fail} />}
+      {(module === 'receive' || module === 'balances') && <section className="card task-panel">
+        <h2>{module === 'balances' ? 'Custódia em campo' : 'Abrir recebimento'}</h2>
+        {module === 'balances' && <ul className="items">{technicians?.items.map(t =>
+          <li key={t.id}><strong>{t.name}</strong> · {t.pending_count ?? '—'} em posse</li>)}</ul>}
         <form className="receipt-form" onSubmit={(event) => {
           event.preventDefault()
           if (!findingTechnicians) { setTechnician(''); void loadTechnicians(search) }
@@ -125,14 +177,14 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
           <label className="review-field">Técnico<select required value={technician} disabled={opening || findingTechnicians}
             onChange={(event) => setTechnician(event.target.value)}>
             <option value="">Selecione o técnico</option>
-            {technicians?.items.map((item) => <option value={item.id} key={item.id}>{item.name} ({item.login})</option>)}
+            {technicians?.items.map((item) => <option value={item.id} key={item.id}>{item.name} ({item.login}){item.pending_count !== undefined && ' · Em posse: ' + item.pending_count}</option>)}
           </select></label>
           <button className="primary" disabled={!technician || opening || findingTechnicians}>Abrir sessão</button>
         </form>
         {technicians?.next_cursor && <button disabled={findingTechnicians}
           onClick={() => void loadTechnicians(searched, technicians.next_cursor!)}>Mais técnicos</button>}
-      </section>
-      <section className="card work-list">
+      </section>}
+      {module === 'history' && <section className="card work-list">
         <div className="section-head"><h2>Minhas sessões</h2>
           <button disabled={findingSessions} onClick={() => void loadSessions()}>Atualizar sessões</button></div>
         {sessions?.items.length === 0 && <p className="empty-state">Nenhuma sessão registrada.</p>}
@@ -146,13 +198,147 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
         ))}</ul>}
         {sessions?.next_cursor && <button disabled={findingSessions}
           onClick={() => void loadSessions(sessions.next_cursor!)}>Mais sessões</button>}
-      </section>
+      </section>}
     </div>}
   </>
 }
 
-function ReceiptSession({ owner, id, fail, back }: {
-  owner: string; id: string; fail: (error: unknown) => string; back: () => void
+type Lookup = { result: 'MATCHED'; equipment_id: string; technician_id: string; technician_name: string; session_id: string | null }
+  | { result: 'UNKNOWN' | 'AMBIGUOUS' | 'ALREADY_RECEIVED'; review_candidates?: {capture_id: string; technician_name: string}[] }
+type MixedItem = { code: string; technician: string; session: string; equipment: string; scan: string }
+
+function EquipmentSearch({ owner, fail }: { owner: string; fail: (failure: unknown) => string }) {
+  const [result, setResult] = useState<{ result: string; history?: {type: string; at: string; holder: string}[] }>()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  return <section className="card"><h2>Histórico de custódia</h2>
+    <form className="receipt-form" onSubmit={async event => {
+      event.preventDefault()
+      if (busy) return
+      const value = String(new FormData(event.currentTarget).get('code')).trim()
+      setBusy(true); setResult(undefined); setError('')
+      try { setResult(await warehouse(owner, '/warehouse/equipment/lookup?value=' + encodeURIComponent(value))) }
+      catch (failure) { setError(fail(failure)) } finally { setBusy(false) }
+    }}>
+      <label>Serial ou MAC<input name="code" autoFocus required maxLength={128} disabled={busy} /></label>
+      <button disabled={busy}>Consultar histórico</button>
+    </form>
+    {error && <p role="alert">{error}</p>}
+    {result && <p role="status">{outcomes[result.result]}</p>}
+    {result?.history && <ol>{result.history.map((movement, index) => <li key={index}>
+      {dateTime.format(new Date(movement.at))} · {movement.type === 'WAREHOUSE_RECEIVED' ? 'Recebido no estoque' : 'Coleta validada'} · {movement.holder}
+    </li>)}</ol>}
+  </section>
+}
+
+function MixedDesk({ owner, fail, refresh }: { owner: string; fail: (error: unknown) => string; refresh: () => void }) {
+  const [code, setCode] = useState('')
+  const [pending, setPending] = useState<MixedItem>()
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const scanner = useRef<HTMLInputElement>(null)
+  const retry = useRef<{ code: string; technician: string; session: string; scan: string } | undefined>(undefined)
+  useEffect(() => {
+    if (busy) return
+    if (!pending) scanner.current?.focus()
+  }, [busy, pending])
+
+  const [exceptions, setExceptions] = useState<Page<{ value: string; result: string; seen_at: string }>>()
+  const [loadingExceptions, setLoadingExceptions] = useState(false)
+  async function loadExceptions(after?: string) {
+    setLoadingExceptions(true)
+    try {
+      const page = await warehouse<NonNullable<typeof exceptions>>(owner, '/receipt-exceptions' + (after ? '?after=' + encodeURIComponent(after) : ''))
+      setExceptions(previous => after && previous ? { ...page, items: [...previous.items, ...page.items] } : page)
+    } catch (failure) { setError(fail(failure)) }
+    finally { setLoadingExceptions(false) }
+  }
+
+  async function lookup(event: FormEvent, value = code.trim()) {
+    event.preventDefault()
+    if (!value || busy || pending) return
+    enableScannerAudio()
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      const found = await warehouse<Lookup>(owner, '/receipt-lookup', jsonPost({ value }))
+      if (found.result !== 'MATCHED') {
+        signal(found.result)
+        const candidates = found.review_candidates ?? []
+        setMessage([value + ' · ' + outcomes[found.result], ...candidates.map(candidate =>
+          'Possível coleta de ' + candidate.technician_name + ' · ' + candidate.capture_id +
+          '. Solicite a revisão da etiqueta ao administrador e consulte novamente.')].join(' '))
+      } else {
+        if (retry.current?.code !== value || retry.current.technician !== found.technician_id) {
+          retry.current = { code: value, technician: found.technician_id, session: found.session_id || crypto.randomUUID(), scan: crypto.randomUUID() }
+        }
+        const attempt = retry.current
+        if (!found.session_id) {
+          await warehouse(owner, '/receipt-sessions', jsonPost({ client_session_id: attempt.session, technician_id: attempt.technician }))
+        }
+        const session = found.session_id || attempt.session
+        const scan = await warehouse<Scan>(owner, '/receipt-sessions/' + session + '/scan', jsonPost({ value, client_scan_id: attempt.scan }))
+        signal(scan.result)
+        if (scan.equipment_id === found.equipment_id && (scan.result === 'MATCHED' || scan.result === 'DUPLICATE_SCAN')) {
+          const item = await warehouse<Item>(owner, '/receipt-sessions/' + session + '/items/' + found.equipment_id)
+          if (item.matched_scan_id && !item.confirmed_at) {
+            setPending({ code: value, technician: found.technician_name, equipment: item.equipment_id, scan: item.matched_scan_id, session })
+          } else setMessage(outcomes.ALREADY_RECEIVED)
+        } else setMessage(outcomes[scan.result] || 'Confira o equipamento na sessão.')
+        refresh()
+      }
+      if (exceptions) await loadExceptions()
+      retry.current = undefined
+      setCode('')
+    } catch (failure) { setError(fail(failure)) }
+    finally { setBusy(false) }
+  }
+
+  async function confirm(inspection: Inspection) {
+    if (!pending || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await warehouse(owner, '/receipt-sessions/' + pending.session + '/confirm', jsonPost({ equipment_id: pending.equipment, scan_id: pending.scan, inspection }))
+      setMessage('Recebido: ' + pending.code + ' · ' + pending.technician)
+      setPending(undefined)
+      refresh()
+    } catch (failure) { setError(fail(failure)) }
+    finally { setBusy(false) }
+  }
+
+  return <section className="card scan-panel">
+    <h2>Receber pilha misturada</h2>
+    <form onSubmit={lookup} className="receipt-form">
+      <label className="review-field">Serial ou MAC da etiqueta<input ref={scanner} value={code} maxLength={128}
+        disabled={busy || !!pending} onChange={(event) => setCode(event.target.value)}
+        onKeyDown={(event) => { if (event.key === 'Tab' && !event.shiftKey && code.trim()) void lookup(event) }} /></label>
+      <button disabled={busy || !!pending || !code.trim()}>Localizar responsável</button>
+    </form>
+    {pending && <div><p><strong>{pending.code}</strong> · {pending.technician}</p>
+      <InspectionForm busy={busy} label="Confirmar entrega física" submit={inspection => void confirm(inspection)} />
+      <button disabled={busy} onClick={() => { setPending(undefined); setError('') }}>Voltar sem confirmar</button>
+    </div>}
+    {message && <p role="status">{message}</p>}
+    <button disabled={busy || loadingExceptions} onClick={() => void loadExceptions()}>
+      {exceptions ? 'Atualizar pendências' : 'Ver minhas etiquetas pendentes'}
+    </button>
+    {exceptions && <div><h3>Minhas etiquetas pendentes</h3>
+      {!exceptions.items.length && <p>Nenhuma etiqueta pendente.</p>}
+      <ul className="items">{exceptions.items.map(entry => <li key={entry.value} className="queue-row">
+        <div><strong>{entry.value}</strong><br />{outcomes[entry.result]} · {dateTime.format(new Date(entry.seen_at))}</div>
+        <button disabled={busy || loadingExceptions || !!pending} onClick={event => void lookup(event, entry.value)}>Consultar novamente</button>
+      </li>)}</ul>
+      {exceptions.next_cursor && <button disabled={busy || loadingExceptions} onClick={() => void loadExceptions(exceptions.next_cursor!)}>Mais pendências</button>}
+    </div>}
+    {error && <p className="alert" role="alert">{error}</p>}
+  </section>
+}
+
+function ReceiptSession({ owner, clerkName, id, fail, back }: {
+  owner: string; clerkName: string; id: string; fail: (error: unknown) => string; back: () => void
 }) {
   const [detail, setDetail] = useState<Detail>()
   const [item, setItem] = useState<Item>()
@@ -173,6 +359,13 @@ function ReceiptSession({ owner, id, fail, back }: {
 
   const load = useCallback(async (cursor?: { type: 'item' | 'scan'; id: string }) => {
     const data = await warehouse<Detail>(owner, path + (cursor ? '?after_' + cursor.type + '=' + cursor.id : ''))
+    if (data.session.closed_at && !cursor) {
+      while (data.next_item) {
+        const page = await warehouse<Detail>(owner, path + '?after_item=' + encodeURIComponent(data.next_item))
+        data.items.push(...page.items)
+        data.next_item = page.next_item
+      }
+    }
     setDetail((previous) => {
       if (!cursor || !previous) return data
       return cursor.type === 'item'
@@ -203,6 +396,7 @@ function ReceiptSession({ owner, id, fail, back }: {
     const code = value.trim()
     const secondCode = secondary.trim() || undefined
     if (!code) return
+    enableScannerAudio()
     await perform(async () => {
       setNotice('')
       if (pendingScan.current?.value !== code || pendingScan.current.secondary_value !== secondCode) {
@@ -211,6 +405,7 @@ function ReceiptSession({ owner, id, fail, back }: {
       const result = await warehouse<Scan>(owner, path + '/scan', jsonPost(pendingScan.current))
       pendingScan.current = undefined
       setLastScan(result)
+      signal(result.result)
       setValue('')
       setSecondary('')
       setItem(undefined)
@@ -224,17 +419,21 @@ function ReceiptSession({ owner, id, fail, back }: {
   }
 
   function suffix(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Enter' && terminator === 'Tab') {
+      event.preventDefault()
+      return
+    }
     if (event.key === terminator && !event.shiftKey && value.trim()) {
       event.preventDefault()
       void scan()
     }
   }
 
-  async function confirm() {
+  async function confirm(inspection: Inspection) {
     if (!physical || !item?.matched_scan_id || item.confirmed_at) return
     await perform(async () => {
       await warehouse(owner, path + '/confirm', jsonPost({
-        equipment_id: item.equipment_id, scan_id: item.matched_scan_id,
+        equipment_id: item.equipment_id, scan_id: item.matched_scan_id, inspection,
       }))
       setNotice('Recebimento confirmado. A custódia foi transferida ao depósito.')
       setItem(undefined)
@@ -266,7 +465,12 @@ function ReceiptSession({ owner, id, fail, back }: {
         <div><h2>{session.technician_name}</h2><p className="muted">{session.warehouse_name} · {open ? 'Sessão aberta' : 'Sessão encerrada'}</p></div>
         <button onClick={back} disabled={busy}>Voltar às sessões</button>
       </div>
+      {!open && <button onClick={() => window.print()}>Imprimir comprovante</button>}
       {session.closing_reason && <p>Justificativa do encerramento: {session.closing_reason}</p>}
+      {totals.expected > 0 && <label className="review-field">
+        Recebidos: {totals.confirmed} de {totals.expected}
+        <progress value={totals.confirmed} max={totals.expected} />
+      </label>}
       <dl className="receipt-totals">
         {([['Previstos', totals.expected], ['Confirmados', totals.confirmed], ['Faltantes', totals.missing],
           ['Duplicados', totals.duplicates], ['Divergências', totals.divergences]] as const).map(([label, count]) => (
@@ -276,6 +480,27 @@ function ReceiptSession({ owner, id, fail, back }: {
       {error && <p role="alert" className="alert">{error}</p>}
       {notice && <p role="status" className="success">{notice}</p>}
     </section>
+    {session.closed_at && <section className="receipt-print">
+      <h1>New Life · Comprovante de devolução</h1>
+      <p>Sessão {session.id}</p>
+      <dl>
+        <dt>Técnico responsável</dt><dd>{session.technician_name}</dd>
+        <dt>Recebido por</dt><dd>{clerkName} · {session.warehouse_name}</dd>
+        <dt>Abertura</dt><dd>{dateTime.format(new Date(session.opened_at))}</dd>
+        <dt>Encerramento</dt><dd>{dateTime.format(new Date(session.closed_at))}</dd>
+        <dt>Equipamentos previstos</dt><dd>{totals.expected}</dd>
+        <dt>Recebidos fisicamente</dt><dd>{totals.confirmed}</dd>
+        <dt>Faltantes</dt><dd>{totals.missing}</dd>
+        <dt>Leituras duplicadas</dt><dd>{totals.duplicates}</dd>
+        <dt>Divergências</dt><dd>{totals.divergences}</dd>
+      </dl>
+      <h2>Relação de equipamentos</h2>
+      <ul>{detail.items.map(entry => <li key={entry.equipment_id}>
+        <strong>{entry.confirmed_at ? 'Recebido' : 'Faltante'}</strong> · {entry.identifiers.map(i => kinds[i.kind] + ': ' + i.raw_value).join(' · ') || entry.equipment_id}
+        {entry.inspection && <div>Fonte: {supplies[entry.inspection.power_supply]} · Cabos: {entry.inspection.cables_present ? 'presentes' : 'ausentes'} · Conservação: {conditions[entry.inspection.condition]}</div>}
+      </li>)}</ul>
+      {session.closing_reason && <p>Justificativa: {session.closing_reason}</p>}
+    </section>}
     {open && <section className="card scan-panel">
       <h2>Ler etiqueta</h2>
       <form className="receipt-form" onSubmit={(event) => { event.preventDefault(); void scan() }}>
@@ -309,7 +534,7 @@ function ReceiptSession({ owner, id, fail, back }: {
       {open && !item.confirmed_at && <>
         <label className="review-confirm"><input type="checkbox" checked={physical} disabled={busy}
           onChange={(event) => setPhysical(event.target.checked)} /> Conferi a etiqueta e recebi o equipamento fisicamente.</label>
-        <button className="primary" disabled={busy || !physical} onClick={() => void confirm()}>Confirmar recebimento físico</button>
+        <InspectionForm key={item.matched_scan_id} busy={busy || !physical} label="Confirmar recebimento físico" submit={inspection => void confirm(inspection)} />
       </>}
     </section>}
     <div className="desk-grid receipt-ledger">
