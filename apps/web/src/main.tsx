@@ -228,18 +228,28 @@ function App() {
     )
   }
 
+  const updateNotice = update && (
+    <aside className="card app-update-notice" aria-label="Atualização do aplicativo">
+      <p>Há uma nova versão. As fotos salvas serão mantidas.</p>
+      <button disabled={syncing} onClick={() => void updater.current(true)}>Atualizar aplicativo</button>
+    </aside>
+  )
+
   // 1. Usuário Administrador ou Estoquista ou Supervisor logado -> Shell Desktop
   if (staff) {
     return (
-      <DesktopShell
-        user={staff}
-        denied={deny}
-        exit={async () => {
-          await leave()
-          setStaff(undefined)
-        }}
-        connected={connected}
-      />
+      <>
+        {updateNotice}
+        <DesktopShell
+          user={staff}
+          denied={deny}
+          exit={async () => {
+            await leave()
+            setStaff(undefined)
+          }}
+          connected={connected}
+        />
+      </>
     )
   }
 
@@ -255,38 +265,44 @@ function App() {
   // 3. Usuário precisa entrar
   if (needsLogin) {
     return (
-      <main style={{ padding: '2rem 1rem' }}>
-        <Login
-          reauthenticate={!!profile}
-          done={(user) => {
-            if (user.role === 'administrator' || user.role === 'warehouse_clerk') {
-              setStaff(user)
-            }
-            setClock(Date.now())
-            setAuthDenied(false)
-          }}
-        />
-        {!standalone && install && (
-          <button className="install" onClick={() => { void install.prompt(); setInstall(undefined) }}>
-            Instalar aplicativo no dispositivo
-          </button>
-        )}
-        {!standalone && appleMobile && (
-          <p className="muted install">No Safari, toque em Compartilhar e em Adicionar à Tela de Início.</p>
-        )}
-      </main>
+      <>
+        {updateNotice}
+        <main style={{ padding: '2rem 1rem' }}>
+          <Login
+            reauthenticate={!!profile}
+            done={(user) => {
+              if (user.role === 'administrator' || user.role === 'warehouse_clerk') {
+                setStaff(user)
+              }
+              setClock(Date.now())
+              setAuthDenied(false)
+            }}
+          />
+          {!standalone && install && (
+            <button className="install" onClick={() => { void install.prompt(); setInstall(undefined) }}>
+              Instalar aplicativo no dispositivo
+            </button>
+          )}
+          {!standalone && appleMobile && (
+            <p className="muted install">No Safari, toque em Compartilhar e em Adicionar à Tela de Início.</p>
+          )}
+        </main>
+      </>
     )
   }
 
   // 4. Usuário Técnico logado -> Interface Móvel Dedicada
   return (
-    <TechDesk
-      profile={profile}
-      deny={deny}
-      syncing={syncing}
-      run={run}
-      leaveDesk={leaveDesk}
-    />
+    <>
+      {updateNotice}
+      <TechDesk
+        profile={profile}
+        deny={deny}
+        syncing={syncing}
+        run={run}
+        leaveDesk={leaveDesk}
+      />
+    </>
   )
 }
 

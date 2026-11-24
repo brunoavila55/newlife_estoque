@@ -212,14 +212,18 @@ test('preserva a foto pendente depois de atualizar o Service Worker', async ({ p
       : route.fulfill({ status: 503, json: { message: 'Armazenamento indisponível.' } }))
 
     await page.goto('http://127.0.0.1:' + (server.address() as AddressInfo).port)
-    await signIn(page)
+    await page.getByLabel('Login').fill(technician.login)
+    await page.getByLabel('Senha').fill('senha-de-teste-local')
+    await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
     await page.evaluate(async () => { await navigator.serviceWorker.ready })
     if (!await page.evaluate(() => Boolean(navigator.serviceWorker.controller))) await page.reload()
-    await expect(page.getByRole('heading', { name: 'Recolhimentos' })).toBeVisible()
+    await page.locator('nav').getByRole('button', { name: /Registrar/ }).click()
 
     await context.setOffline(true)
-    await page.locator('input[aria-label="Arquivo da foto"]').setInputFiles(photo)
-    await expect(page.getByText('1 pendente(s)', { exact: true })).toBeVisible()
+    await page.locator('input[type=file]:not([capture])').setInputFiles(photo)
+    await page.getByLabel('Número de Série (SN)').fill('0001')
+    await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
+    await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
     await context.setOffline(false)
 
     revision = 2
@@ -227,7 +231,8 @@ test('preserva a foto pendente depois de atualizar o Service Worker', async ({ p
     const update = page.getByRole('button', { name: 'Atualizar aplicativo' })
     await expect(update).toBeVisible()
     await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), update.click()])
-    await expect(page.getByText('1 pendente(s)', { exact: true })).toBeVisible()
+    await page.locator('nav').getByRole('button', { name: /Fila/ }).click()
+    await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
     const size = await page.evaluate(() => new Promise<number>((resolve, reject) => {
       const open = indexedDB.open('newlife-stock')
       open.onerror = reject
