@@ -56,7 +56,7 @@ Entre no mesmo aplicativo com a conta de administrador. Em **Revisão de etiquet
 
 ## Recebimento no depósito piloto
 
-Cadastre um estoquista em **Usuários**. Entre com a conta dele no aplicativo e abra uma sessão para o técnico que está entregando os equipamentos. O sistema fixa a lista de equipamentos previstos naquele momento. Uma coleta validada depois da abertura pode ser conferida em outra sessão.
+Entre como administrador ou estoquista e abra a **Mesa de recebimento**. Abra uma sessão para o técnico que está entregando os equipamentos. O sistema fixa a lista de equipamentos previstos naquele momento. Uma coleta validada depois da abertura pode ser conferida em outra sessão.
 
 Com o cursor em **Código lido**, use um scanner USB ou Bluetooth no modo teclado. Configure o mesmo sufixo no scanner e no painel, **Enter** ou **Tab**. Também é possível digitar e clicar em **Buscar código**. Para conferir dois identificadores, informe o segundo antes de enviar a leitura principal.
 

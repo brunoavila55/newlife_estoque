@@ -169,6 +169,14 @@ pub async fn authorize<'a>(
     headers: &HeaderMap,
     role: Role,
 ) -> Result<(Transaction<'a, Postgres>, Uuid), ApiError> {
+    authorize_roles(db, headers, &[role]).await
+}
+
+pub async fn authorize_roles<'a>(
+    db: &'a PgPool,
+    headers: &HeaderMap,
+    roles: &[Role],
+) -> Result<(Transaction<'a, Postgres>, Uuid), ApiError> {
     let token = bearer(headers)?;
     let mut tx = db.begin().await?;
     let id = session_user(&mut tx, &token, false).await?.id;
@@ -180,7 +188,7 @@ pub async fn authorize<'a>(
     }
     // Recheck after obtaining the same user lock used for revocation.
     session_user(&mut tx, &token, false).await?;
-    if user.role != role {
+    if !roles.contains(&user.role) {
         return Err(ApiError::forbidden());
     }
     Ok((tx, id))

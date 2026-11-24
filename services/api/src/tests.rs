@@ -1088,6 +1088,27 @@ async fn receipt_scopes_scans_and_transfers_custody_once_under_concurrency(db: P
     .await;
     let sessions = "/api/v1/receipt-sessions";
     assert_eq!(
+        call(
+            &app,
+            "GET",
+            "/api/v1/receipt-technicians",
+            Some(access(&admin)),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let admin_session = call(
+        &app,
+        "POST",
+        sessions,
+        Some(access(&admin)),
+        json!({"technician_id":other,"client_session_id":Uuid::new_v4()}),
+    )
+    .await;
+    assert_eq!(admin_session.0, StatusCode::OK, "{}", admin_session.1);
+    assert_eq!(
         call(&app, "GET", sessions, Some(access(&actor)), Value::Null)
             .await
             .0,

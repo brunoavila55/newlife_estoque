@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{Role, audit, authorize, parse_id},
+    auth::{Role, audit, authorize_roles, parse_id},
     custody::{normalize_mac, normalize_serial},
     error::{ApiError, Body},
 };
@@ -22,7 +22,12 @@ async fn authorize_receive<'a>(
     state: &'a AppState,
     headers: &HeaderMap,
 ) -> Result<(Transaction<'a, Postgres>, Uuid), ApiError> {
-    authorize(&state.db, headers, Role::WarehouseClerk).await
+    authorize_roles(
+        &state.db,
+        headers,
+        &[Role::WarehouseClerk, Role::Administrator],
+    )
+    .await
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

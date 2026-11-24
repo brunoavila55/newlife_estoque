@@ -76,14 +76,21 @@ export async function lockDevice(): Promise<void> {
   await db.profiles.delete('current')
 }
 
-async function renew(owner: string, role: UserRole = 'technician'): Promise<Session> {
+type SessionScope = UserRole | 'warehouse'
+
+function matchesScope(user: User, scope: SessionScope): boolean {
+  const role = user.role ?? 'technician'
+  return scope === 'warehouse' ? role === 'administrator' || role === 'warehouse_clerk' : role === scope
+}
+
+async function renew(owner: string, scope: SessionScope = 'technician'): Promise<Session> {
   renewing ??= webSession('refresh').finally(() => { renewing = undefined })
   const fresh = await renewing
   // Outra aba pode ter entrado com uma conta diferente enquanto a requisição estava em andamento.
-  if (fresh.user.id !== owner || role !== (fresh.user.role ?? 'technician')) {
+  if (fresh.user.id !== owner || !matchesScope(fresh.user, scope)) {
     throw new ApiError(401, 'ACCOUNT_CHANGED', 'Entre novamente com a conta autorizada.')
   }
-  if (role === 'technician') await db.transaction('rw', db.profiles, async () => {
+  if (scope === 'technician') await db.transaction('rw', db.profiles, async () => {
     const profile = await db.profiles.get('current')
     if (profile?.id !== owner) {
       throw new ApiError(401, 'ACCOUNT_CHANGED', 'Entre com a conta que registrou estas fotos.')
@@ -132,11 +139,12 @@ export function administrator<T>(owner: string, path: string, input: RequestInit
 }
 
 export function warehouse<T>(owner: string, path: string, input: RequestInit = {}): Promise<T> {
-  return signedRequest(owner, path, input, 'warehouse_clerk')
+  return signedRequest(owner, path, input, 'warehouse')
 }
 
-async function signedRequest<T>(owner: string, path: string, input: RequestInit, role: UserRole): Promise<T> {
-  const active = session?.user.id === owner && Date.now() < session.expiresAt ? session : await renew(owner, role)
+async function signedRequest<T>(owner: string, path: string, input: RequestInit, scope: SessionScope): Promise<T> {
+  const active = session?.user.id === owner && matchesScope(session.user, scope) && Date.now() < session.expiresAt
+    ? session : await renew(owner, scope)
   const send = (token: string) => {
     const headers = new Headers(input.headers)
     headers.set('Authorization', 'Bearer ' + token)
@@ -146,7 +154,8 @@ async function signedRequest<T>(owner: string, path: string, input: RequestInit,
     return await send(active.access_token)
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 401) throw error
-    const next = session?.user.id === owner && session !== active ? session : await renew(owner, role)
+    const next = session?.user.id === owner && matchesScope(session.user, scope) && session !== active
+      ? session : await renew(owner, scope)
     return send(next.access_token)
   }
 }

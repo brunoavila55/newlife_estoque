@@ -35,23 +35,21 @@ export function DesktopShell({ user, denied, exit, connected }: DesktopShellProp
     <div className="desktop-shell-layout">
       <Sidebar currentModule={currentModule} onSelectModule={navigate} user={user} onLogout={() => void exit()} />
       <div className="desktop-main-column">
-        <Topbar connected={connected} onQuickSearch={administrator ? undefined : search} />
+        <Topbar connected={connected} onQuickSearch={search} />
         <main className="desktop-main-wrapper">
           {currentModule === 'dashboard' && <DashboardModule administrator={administrator} onNavigate={navigate} />}
-          {!administrator && <>
-            {(currentModule === 'receiving' || currentModule === 'history') &&
-              <ReceivingDesk key={currentModule} clerk={user} denied={denied} exit={exit}
-                initialModule={currentModule === 'history' ? 'history' : 'receive'} />}
-            {currentModule === 'catalog' && <>
-              <h1>Rastreamento de equipamentos</h1>
-              <EquipmentSearch key={lookup?.sequence} owner={user.id} denied={denied} initialCode={lookup?.query} />
-            </>}
-            {currentModule === 'discrepancies' && <>
-              <h1>Divergências</h1>
-              <ReceiptExceptions owner={user.id} denied={denied} />
-            </>}
-            {currentModule === 'diagnostics' && <DiagnosticsModule />}
+          {(currentModule === 'receiving' || currentModule === 'history') &&
+            <ReceivingDesk key={currentModule} clerk={user} denied={denied} exit={exit}
+              initialModule={currentModule === 'history' ? 'history' : 'receive'} />}
+          {currentModule === 'catalog' && <>
+            <h1>Rastreamento de equipamentos</h1>
+            <EquipmentSearch key={lookup?.sequence} owner={user.id} denied={denied} initialCode={lookup?.query} />
           </>}
+          {currentModule === 'discrepancies' && <>
+            <h1>Divergências</h1>
+            <ReceiptExceptions owner={user.id} denied={denied} />
+          </>}
+          {currentModule === 'diagnostics' && <DiagnosticsModule />}
           {administrator && currentModule === 'review' && <ReviewDesk admin={user} denied={denied} />}
           {administrator && currentModule === 'users' && <AdminDesk admin={user} denied={denied} exit={exit} />}
           {currentModule === 'onboarding' && <OnboardingModule />}

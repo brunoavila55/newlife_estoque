@@ -714,7 +714,7 @@ paths:
     get:
       operationId: listReceiptTechnicians
       summary: Buscar técnicos para uma sessão de recebimento
-      description: Requer permissão warehouse:receive no depósito piloto.
+      description: Requer permissão warehouse:receive, concedida a administradores e estoquistas no depósito piloto.
       parameters:
         - name: search
           in: query
@@ -744,7 +744,7 @@ paths:
   /api/v1/receipt-sessions:
     get:
       operationId: listReceiptSessions
-      summary: Listar sessões do estoquista autenticado
+      summary: Listar sessões abertas pelo operador autenticado
       parameters:
         - $ref: '#/components/parameters/After'
         - $ref: '#/components/parameters/Limit'

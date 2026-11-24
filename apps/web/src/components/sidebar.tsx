@@ -39,13 +39,12 @@ export function Sidebar({ currentModule, onSelectModule, user, onLogout }: Sideb
     ...(admin ? [
       { id: 'review', label: 'Revisão de OCR', icon: 'camera' },
       { id: 'users', label: 'Usuários e permissões', icon: 'users' },
-    ] as const : [
-      { id: 'receiving', label: 'Mesa de recebimento', icon: 'scan' },
-      { id: 'history', label: 'Histórico e comprovantes', icon: 'file' },
-      { id: 'catalog', label: 'Rastreamento', icon: 'search' },
-      { id: 'discrepancies', label: 'Divergências', icon: 'alert' },
-      { id: 'diagnostics', label: 'Teste de leitor', icon: 'scan' },
-    ] as const),
+    ] as const : []),
+    { id: 'receiving', label: 'Mesa de recebimento', icon: 'scan' },
+    { id: 'history', label: 'Histórico e comprovantes', icon: 'file' },
+    { id: 'catalog', label: 'Rastreamento', icon: 'search' },
+    { id: 'discrepancies', label: 'Divergências', icon: 'alert' },
+    { id: 'diagnostics', label: 'Teste de leitor', icon: 'scan' },
     { id: 'onboarding', label: 'Ajuda', icon: 'help' },
   ]
 

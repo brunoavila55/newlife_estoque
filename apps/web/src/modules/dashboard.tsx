@@ -23,13 +23,13 @@ export function DashboardModule({ administrator, onNavigate }: {
       <section className="operations-panel">
         <h2>Acesso rápido</h2>
         <div className="operations-grid">
-          {administrator ? (
+          {administrator && <>
             <button onClick={() => onNavigate('users')}><Icon name="users" /><span>Gerenciar usuários</span></button>
-          ) : <>
-            <button onClick={() => onNavigate('catalog')}><Icon name="search" /><span>Rastrear equipamento</span></button>
-            <button onClick={() => onNavigate('history')}><Icon name="file" /><span>Consultar comprovantes</span></button>
-            <button onClick={() => onNavigate('discrepancies')}><Icon name="alert" /><span>Ver divergências</span></button>
+            <button onClick={() => onNavigate('receiving')}><Icon name="scan" /><span>Abrir mesa de recebimento</span></button>
           </>}
+          <button onClick={() => onNavigate('catalog')}><Icon name="search" /><span>Rastrear equipamento</span></button>
+          <button onClick={() => onNavigate('history')}><Icon name="file" /><span>Consultar comprovantes</span></button>
+          <button onClick={() => onNavigate('discrepancies')}><Icon name="alert" /><span>Ver divergências</span></button>
         </div>
       </section>
     </div>

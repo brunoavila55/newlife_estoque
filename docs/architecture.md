@@ -6,7 +6,7 @@ Um processo Axum usa o PostgreSQL para contas, sessões, capturas, identidades v
 
 As senhas usam Argon2id. Os tokens opacos de acesso e renovação têm hashes persistidos separadamente. A renovação rotaciona os dois tokens e mantém o limite de sete dias desde o login. Desativação e redefinição de senha são auditadas e revogam as sessões na mesma transação. O bloqueio por conta ordena renovação, revogação e operações autorizadas concorrentes. O comando de inicialização é a via de criação do primeiro administrador.
 
-O administrador revisa capturas e gerencia contas de técnico e estoquista. O estoque privado consulta o técnico derivado da sessão. No painel administrativo, a lista de contas inclui usuários desativados e permite consultar a custódia atual de cada técnico. No piloto, o papel de estoquista concede warehouse:receive no depósito único. Cada estoquista acessa apenas suas próprias sessões.
+O administrador revisa capturas e gerencia contas de técnico e estoquista. O estoque privado consulta o técnico derivado da sessão. No painel administrativo, a lista de contas inclui usuários desativados e permite consultar a custódia atual de cada técnico. No piloto, administradores e estoquistas têm a permissão warehouse:receive no depósito único. Cada operador acessa as sessões que abriu.
 
 ## Custódia e revisão
 

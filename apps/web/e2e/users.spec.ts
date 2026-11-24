@@ -4,11 +4,23 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
   const admin = { id: 'admin', name: 'Administração', login: 'admin', role: 'administrator', active: true }
   const technician = { id: 'tech', name: 'Técnica de campo', login: 'tecnica-01', role: 'technician', active: true }
   let created = false
+  let refreshed = false
   await context.route('**/api/v1/**', (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
     if (path.endsWith('/auth/web/login')) {
       return route.fulfill({ json: { user: admin, access_token: 'mock-token', expires_in: 3600 } })
+    }
+    if (path.endsWith('/auth/web/refresh')) {
+      refreshed = true
+      return route.fulfill({ json: { user: admin, access_token: 'renewed-token', expires_in: 3600 } })
+    }
+    if (path.endsWith('/receipt-sessions')) {
+      return route.fulfill({ json: { items: [], next_cursor: null } })
+    }
+    if (path.endsWith('/receipt-technicians')) {
+      if (request.headers().authorization !== 'Bearer renewed-token') return route.fulfill({ status: 401 })
+      return route.fulfill({ json: { items: [technician], next_cursor: null } })
     }
     if (path.endsWith('/admin/users')) {
       if (request.method() === 'GET') {
@@ -45,7 +57,10 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
   await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
   const menu = page.getByRole('navigation', { name: 'Módulos do estoque' })
   await expect(menu.getByRole('button', { name: 'Revisão de OCR' })).toBeVisible()
-  await expect(menu.getByRole('button', { name: 'Mesa de recebimento' })).toHaveCount(0)
+  await menu.getByRole('button', { name: 'Mesa de recebimento' }).click()
+  await expect(page.getByRole('heading', { name: 'Recebimento de equipamentos' })).toBeVisible()
+  await expect(page.getByRole('option', { name: /Técnica de campo/ })).toBeAttached()
+  expect(refreshed).toBe(true)
   await menu.getByRole('button', { name: 'Usuários e permissões', exact: true }).click()
   await expect(page.getByText('admin · Administrador · Ativo')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Criar usuário' })).toHaveCount(0)
