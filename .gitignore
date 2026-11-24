@@ -4,3 +4,13 @@
 /apps/web/dist/
 /apps/web/test-results/
 /apps/web/playwright-report/
+
+# Temporary logs & tooling artifacts
+*.log
+craft.json
+feed.json
+inbox/
+investigation.cany/
+transcript.json
+usage.json
+capture/

@@ -302,6 +302,7 @@ fn file_hash(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn private_directory(path: &Path) -> io::Result<()> {
+    #[allow(unused_mut)]
     let mut builder = DirBuilder::new();
     #[cfg(unix)]
     {
