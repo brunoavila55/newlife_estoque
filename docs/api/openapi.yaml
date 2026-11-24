@@ -256,8 +256,12 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/ReviewCapture'
                   - type: object
-                    required: [barcode_evidence, validated_identifiers, runs, result]
+                    required: [barcode_evidence, complement, validated_identifiers, runs, result]
                     properties:
+                      complement:
+                        oneOf:
+                          - $ref: '#/components/schemas/CaptureComplement'
+                          - type: 'null'
                       barcode_evidence:
                         oneOf:
                           - $ref: '#/components/schemas/BarcodeEvidence'
@@ -451,6 +455,10 @@ paths:
                 captured_at_device: { type: string, format: date-time }
                 sha256: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
                 byte_length: { type: integer, minimum: 1, maximum: 12582912 }
+                complement:
+                  oneOf:
+                    - $ref: '#/components/schemas/CaptureComplement'
+                    - type: 'null'
                 barcode_evidence:
                   oneOf:
                     - $ref: '#/components/schemas/BarcodeEvidence'
@@ -1022,6 +1030,17 @@ components:
         secondary_value: { type: [string, 'null'] }
         result: { enum: [MATCHED, DUPLICATE_SCAN, UNKNOWN, AMBIGUOUS, OTHER_TECHNICIAN, ALREADY_RECEIVED, NOT_IN_SESSION, IDENTIFIER_MISMATCH] }
         created_at: { type: string, format: date-time }
+    CaptureComplement:
+      type: object
+      description: Dados informados no recolhimento, preservados como evidência da coleta.
+      additionalProperties: false
+      properties:
+        model: { type: string, maxLength: 160 }
+        service_order: { type: string, maxLength: 160 }
+        condition: { enum: [GOOD, DAMAGED] }
+        power_supply: { enum: [ORIGINAL, REPLACEMENT, MISSING] }
+        cables: { type: boolean }
+        notes: { type: string, maxLength: 2000 }
     BarcodeEvidence:
       type: object
       additionalProperties: false

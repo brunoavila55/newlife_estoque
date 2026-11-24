@@ -17,6 +17,14 @@ type Capture = {
 type Run = { id: string; status: string; created_at: string }
 type Detail = Capture & {
   barcode_evidence: BarcodeEvidence | null
+  complement?: {
+    model?: string
+    service_order?: string
+    condition?: 'GOOD' | 'DAMAGED'
+    power_supply?: 'ORIGINAL' | 'REPLACEMENT' | 'MISSING'
+    cables?: boolean
+    notes?: string
+  } | null
   validated_identifiers: (Identifier & { normalized_value: string })[] | null
   runs: Run[]
   result: (Run & {
@@ -229,6 +237,8 @@ function ReviewCapture({ owner, id, fail, changed, close }: {
 
   const result = capture?.result
   const barcode = capture?.barcode_evidence
+  const details = capture?.complement
+  const powerLabels = { ORIGINAL: 'Original', REPLACEMENT: 'Paralela', MISSING: 'Ausente' }
   const identified = capture?.status === 'IDENTIFIED'
   const eligible = capture && !capture.review_issue && ['RECEIVED', 'NEEDS_REVIEW', 'OCR_FAILED'].includes(capture.status)
 
@@ -249,6 +259,17 @@ function ReviewCapture({ owner, id, fail, changed, close }: {
         {issues[capture.review_issue.code] ?? capture.review_issue.code}
         {capture.review_issue.reason && <>. {capture.review_issue.reason}</>}
       </p>}
+      {details && <section aria-label="Informações do recolhimento">
+        <h3>Informações do recolhimento</h3>
+        <dl>
+          {details.model && <><dt>Modelo informado</dt><dd>{details.model}</dd></>}
+          {details.service_order && <><dt>Ordem de serviço</dt><dd>{details.service_order}</dd></>}
+          {details.condition && <><dt>Estado da carcaça</dt><dd>{details.condition === 'GOOD' ? 'Bom estado' : 'Avariada'}</dd></>}
+          {details.power_supply && <><dt>Fonte</dt><dd>{powerLabels[details.power_supply]}</dd></>}
+          {details.cables !== undefined && <><dt>Cabos inclusos</dt><dd>{details.cables ? 'Sim' : 'Não'}</dd></>}
+          {details.notes && <><dt>Observações</dt><dd>{details.notes}</dd></>}
+        </dl>
+      </section>}
       <div className="review-grid">
         <section className="review-block evidence-panel">
           <h3>Foto original</h3>

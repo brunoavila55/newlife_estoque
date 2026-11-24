@@ -276,6 +276,7 @@ test('revisa o OCR com foto e confirma a correção feita pelo administrador', a
     }
     if (path === '/api/v1/admin/captures/' + id) {
       return route.fulfill({ json: { ...capture, barcode_evidence: null, validated_identifiers: validated,
+        complement: { service_order: 'OS-10492', cables: false },
         runs: [{ id: resultId, status: result.status, created_at: date }], result } })
     }
     if (path.endsWith('/image-url')) {
@@ -295,11 +296,13 @@ test('revisa o OCR com foto e confirma a correção feita pelo administrador', a
   await page.goto('/')
   await page.getByLabel('Login').fill('admin')
   await page.getByLabel('Senha').fill('senha-de-teste-local')
-  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
-  await page.getByRole('button', { name: 'Revisão de etiquetas', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Revisão de etiquetas' })).toBeVisible()
+  await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
+  await page.getByRole('button', { name: /Revisão de OCR/ }).click()
   await page.getByRole('button', { name: 'Abrir captura' }).click()
   await expect(page.getByRole('img', { name: 'Foto da etiqueta enviada pelo técnico' })).toBeVisible()
+  const collectionDetails = page.getByRole('region', { name: 'Informações do recolhimento' })
+  await expect(collectionDetails.getByText('OS-10492')).toBeVisible()
+  await expect(collectionDetails.getByText('Não', { exact: true })).toBeVisible()
   await expect(page.getByText('Confiança do OCR: 50%')).toBeVisible()
   await page.getByRole('button', { name: 'Usar Serial' }).click()
   await page.getByLabel('Valor', { exact: true }).fill('0001')
@@ -353,4 +356,40 @@ test('retoma pelo mesmo UUID quando a resposta da confirmação se perde', async
   await expect(page.getByText('Recebida · aguardando processamento')).toBeVisible()
   expect(uploadRequests).toBe(1)
   expect(durableReceipts).toBe(1)
+})
+
+test('sincroniza os dados complementares do formulário do técnico', async ({ page, context }) => {
+  const user = { ...technician, role: 'technician' }
+  await context.route('**/api/v1/**', (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === '/api/v1/auth/web/login') {
+      return route.fulfill({ json: { access_token: 'mock-token', expires_in: 3600, user } })
+    }
+    if (path === '/api/v1/captures') {
+      return route.fulfill({ json: {
+        id: route.request().postDataJSON().client_capture_id,
+        received: true,
+        status: 'OCR_PENDING',
+      } })
+    }
+    return route.fulfill({ status: 404 })
+  })
+
+  await page.goto('/')
+  await page.getByLabel('Login').fill(technician.login)
+  await page.getByLabel('Senha').fill('senha-de-teste-local')
+  await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
+  await page.locator('nav').getByRole('button', { name: /Registrar/ }).click()
+  await page.locator('input[type=file]:not([capture])').setInputFiles(photo)
+  await page.getByLabel('Número de Série (SN)').fill('0001')
+  await page.getByLabel('Ordem de Serviço (OS) ou Contrato').fill('OS-10492')
+  await page.getByRole('button', { name: /Avariado/ }).click()
+  await page.getByRole('button', { name: 'Ausente' }).click()
+  await page.getByLabel('Observações do recolhimento').fill('Carcaça riscada.')
+  const request = page.waitForRequest((request) =>
+    request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/captures')
+  await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
+  expect((await request).postDataJSON().complement).toMatchObject({
+    service_order: 'OS-10492', condition: 'DAMAGED', power_supply: 'MISSING', notes: 'Carcaça riscada.',
+  })
 })

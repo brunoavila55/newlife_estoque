@@ -121,6 +121,7 @@ pub struct CaptureDetail {
     #[sqlx(flatten)]
     capture: QueueCapture,
     barcode_evidence: Option<Value>,
+    complement: Option<Value>,
     validated_identifiers: Option<Value>,
     #[sqlx(skip)]
     runs: Vec<OcrRun>,
@@ -140,7 +141,7 @@ pub async fn detail(
         query.map_err(|_| ApiError::invalid("Identificador da leitura inválido."))?;
     let mut detail: CaptureDetail = sqlx::query_as(
         "SELECT c.id, u.name AS technician_name, c.status, c.captured_at_device, c.received_at_server,
-                c.equipment_id, c.review_issue, c.barcode_evidence, c.validated_identifiers
+                c.equipment_id, c.review_issue, c.barcode_evidence, c.complement, c.validated_identifiers
          FROM captures c JOIN users u ON u.id = c.technician_id WHERE c.id = $1 FOR SHARE OF c",
     ).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
     detail.runs = sqlx::query_as(

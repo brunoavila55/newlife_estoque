@@ -655,9 +655,15 @@ async fn captures_retry_safely_and_enqueue_only_after_integrity_check(db: PgPool
     let input = json!({
         "client_capture_id": client_capture_id, "captured_at_device": "2026-11-24T12:00:00.000Z",
         "sha256": format!("{:x}", Sha256::digest(&image)), "byte_length": image.len(),
-        "barcode_evidence": {"raw_value": "00678", "source": "ZXING"}
+        "barcode_evidence": {"raw_value": "00678", "source": "ZXING"},
+        "complement": {"model": "Roteador A", "service_order": "OS-10492", "condition": "DAMAGED", "power_supply": "MISSING", "cables": false}
     });
+    let mut legacy = input.clone();
+    legacy.as_object_mut().unwrap().remove("complement");
+    let (status, legacy_stage) = call(&app, "POST", "/api/v1/captures", Some(token), legacy).await;
+    assert_eq!(status, StatusCode::OK);
     let (status, staged) = call(&app, "POST", "/api/v1/captures", Some(token), input.clone()).await;
+    assert_eq!(legacy_stage, staged);
     assert_eq!(status, StatusCode::OK, "{staged}");
     assert_eq!(staged["received"], false);
     assert_eq!(
@@ -735,6 +741,18 @@ async fn captures_retry_safely_and_enqueue_only_after_integrity_check(db: PgPool
         .await
         .unwrap();
     assert_eq!(barcode, input["barcode_evidence"]);
+    let detail = format!("/api/v1/admin/captures/{}", staged["id"].as_str().unwrap());
+    let (status, reviewed) = call(&app, "GET", &detail, Some(access(&admin)), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert_eq!(reviewed["complement"], input["complement"]);
+    let mut conflicting = input.clone();
+    conflicting["complement"]["cables"] = json!(true);
+    assert_eq!(
+        call(&app, "POST", "/api/v1/captures", Some(token), conflicting)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
     assert_eq!(
         call(&app, "POST", "/api/v1/captures", Some(token), input)
             .await

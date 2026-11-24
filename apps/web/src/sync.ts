@@ -3,6 +3,7 @@ import { claim, db, settle, type Capture } from './db'
 
 async function send(capture: Capture): Promise<void> {
   const owner = capture.owner
+  const details = capture.complement
   const created = await authenticated<Receipt>(owner, '/captures', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -12,6 +13,14 @@ async function send(capture: Capture): Promise<void> {
       sha256: capture.sha256,
       barcode_evidence: capture.barcode,
       byte_length: capture.size,
+      complement: details && {
+        model: details.model,
+        service_order: details.serviceOrder,
+        condition: details.condition,
+        power_supply: details.powerSupply,
+        cables: details.cables,
+        notes: details.notes,
+      },
     }),
   })
   let receipt = created

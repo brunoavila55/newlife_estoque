@@ -45,13 +45,6 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
     await performLogin(loginInput, passwordInput)
   }
 
-  // Atalhos de demonstração rápida para homologação
-  function fillDemo(login: string, pass: string) {
-    setLoginInput(login)
-    setPasswordInput(pass)
-    void performLogin(login, pass)
-  }
-
   return (
     <section className="login">
       <div className="login-brand">
@@ -66,7 +59,7 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
         <p>
           {reauthenticate
             ? 'As coletas e fotos salvas ficam vinculadas à conta que as registrou.'
-            : 'Entre com as credenciais da sua unidade ou selecione um perfil de teste.'}
+            : 'Entre com as credenciais da sua unidade.'}
         </p>
 
         <form onSubmit={(event) => void submit(event)}>
@@ -103,32 +96,6 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
           </p>
         )}
 
-        <div className="demo-profiles-box">
-          <small className="muted">Atalhos rápidos para teste:</small>
-          <div className="demo-buttons-group">
-            <button
-              type="button"
-              className="small-btn"
-              onClick={() => fillDemo('admin', 'admin123')}
-            >
-              👑 Administrador
-            </button>
-            <button
-              type="button"
-              className="small-btn"
-              onClick={() => fillDemo('estoquista', 'estoque123')}
-            >
-              ⚡ Estoquista
-            </button>
-            <button
-              type="button"
-              className="small-btn"
-              onClick={() => fillDemo('tecnico', 'tecnico123')}
-            >
-              👷 Técnico de Campo
-            </button>
-          </div>
-        </div>
       </div>
     </section>
   )

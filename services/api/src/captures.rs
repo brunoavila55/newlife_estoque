@@ -28,6 +28,39 @@ pub struct CreateUpload {
     sha256: String,
     byte_length: i32,
     barcode_evidence: Option<BarcodeEvidence>,
+    complement: Option<CaptureComplement>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CaptureComplement {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    service_order: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    condition: Option<CollectionCondition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    power_supply: Option<CollectionPowerSupply>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cables: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum CollectionCondition {
+    Good,
+    Damaged,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum CollectionPowerSupply {
+    Original,
+    Replacement,
+    Missing,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
@@ -60,6 +93,7 @@ struct Upload {
     sha256: Vec<u8>,
     byte_length: i32,
     barcode_evidence: Option<SqlJson<BarcodeEvidence>>,
+    complement: Option<SqlJson<CaptureComplement>>,
     captured_at_device: DateTime<Utc>,
 }
 
@@ -70,6 +104,7 @@ struct StoredCapture {
     captured_at_device: DateTime<Utc>,
     status: String,
     barcode_evidence: Option<SqlJson<BarcodeEvidence>>,
+    complement: Option<SqlJson<CaptureComplement>>,
 }
 
 impl CaptureStatus {
@@ -154,7 +189,7 @@ async fn stored_status(
 
 async fn upload(db: &mut PgConnection, technician: Uuid, id: Uuid) -> Result<Upload, ApiError> {
     sqlx::query_as(
-        "SELECT id, client_capture_id, image_object_key, sha256, byte_length, captured_at_device, barcode_evidence
+        "SELECT id, client_capture_id, image_object_key, sha256, byte_length, captured_at_device, barcode_evidence, complement
          FROM capture_uploads WHERE technician_id = $1 AND id = $2 FOR UPDATE",
     )
     .bind(technician)
@@ -175,11 +210,27 @@ pub async fn create(
     }
     let sha256 = parse_checksum(&input.sha256)?;
     validate_barcode(input.barcode_evidence.as_ref())?;
+    if let Some(details) = &input.complement {
+        for (value, limit) in [
+            (&details.model, 160),
+            (&details.service_order, 160),
+            (&details.notes, 2000),
+        ] {
+            if value
+                .as_ref()
+                .is_some_and(|value| value.chars().count() > limit || value.contains('\0'))
+            {
+                return Err(ApiError::invalid(
+                    "Modelo e OS aceitam até 160 caracteres. Observações aceitam até 2.000 caracteres.",
+                ));
+            }
+        }
+    }
     let captured_at = DateTime::from_timestamp_micros(input.captured_at_device.timestamp_micros())
         .ok_or_else(|| ApiError::invalid("Data da captura inválida."))?;
     let candidate = Uuid::new_v4();
     let existing: Option<StoredCapture> = sqlx::query_as(
-        "SELECT id, sha256, captured_at_device, status, barcode_evidence FROM captures
+        "SELECT id, sha256, captured_at_device, status, barcode_evidence, complement FROM captures
          WHERE technician_id = $1 AND client_capture_id = $2",
     )
     .bind(technician)
@@ -191,6 +242,10 @@ pub async fn create(
             || previous.captured_at_device != captured_at
             || previous.barcode_evidence.as_ref().map(|value| &value.0)
                 != input.barcode_evidence.as_ref()
+            || previous
+                .complement
+                .as_ref()
+                .is_some_and(|previous| Some(&previous.0) != input.complement.as_ref())
         {
             return Err(conflict());
         }
@@ -206,13 +261,13 @@ pub async fn create(
         return Ok(Json(CaptureStatus::received(previous.id, previous.status)));
     }
     sqlx::query(
-        "INSERT INTO capture_uploads (id, client_capture_id, technician_id, image_object_key, sha256, byte_length, captured_at_device, barcode_evidence)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        "INSERT INTO capture_uploads (id, client_capture_id, technician_id, image_object_key, sha256, byte_length, captured_at_device, barcode_evidence, complement)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (technician_id, client_capture_id) DO NOTHING",
     ).bind(candidate).bind(input.client_capture_id).bind(technician).bind(format!("labels/{}", Uuid::new_v4()))
-        .bind(&sha256).bind(input.byte_length).bind(captured_at).bind(input.barcode_evidence.as_ref().map(SqlJson)).execute(&mut *tx).await?;
+        .bind(&sha256).bind(input.byte_length).bind(captured_at).bind(input.barcode_evidence.as_ref().map(SqlJson)).bind(input.complement.as_ref().map(SqlJson)).execute(&mut *tx).await?;
     let row: Upload = sqlx::query_as(
-        "SELECT id, client_capture_id, image_object_key, sha256, byte_length, captured_at_device, barcode_evidence
+        "SELECT id, client_capture_id, image_object_key, sha256, byte_length, captured_at_device, barcode_evidence, complement
          FROM capture_uploads WHERE technician_id = $1 AND client_capture_id = $2",
     )
     .bind(technician)
@@ -223,8 +278,19 @@ pub async fn create(
         || row.byte_length != input.byte_length
         || row.captured_at_device != captured_at
         || row.barcode_evidence.as_ref().map(|value| &value.0) != input.barcode_evidence.as_ref()
+        || row
+            .complement
+            .as_ref()
+            .is_some_and(|previous| Some(&previous.0) != input.complement.as_ref())
     {
         return Err(conflict());
+    }
+    if row.complement.is_none() && input.complement.is_some() {
+        sqlx::query("UPDATE capture_uploads SET complement = $2 WHERE id = $1")
+            .bind(row.id)
+            .bind(input.complement.as_ref().map(SqlJson))
+            .execute(&mut *tx)
+            .await?;
     }
     tx.commit().await?;
     Ok(Json(CaptureStatus::pending(row.id)))
@@ -318,10 +384,10 @@ pub async fn complete(
         return Err(missing_image());
     }
     sqlx::query(
-        "INSERT INTO captures (id, client_capture_id, technician_id, image_object_key, sha256, captured_at_device, status, barcode_evidence)
-         VALUES ($1, $2, $3, $4, $5, $6, 'OCR_PENDING', $7)",
+        "INSERT INTO captures (id, client_capture_id, technician_id, image_object_key, sha256, captured_at_device, status, barcode_evidence, complement)
+         VALUES ($1, $2, $3, $4, $5, $6, 'OCR_PENDING', $7, $8)",
     ).bind(id).bind(row.client_capture_id).bind(technician).bind(&row.image_object_key)
-        .bind(&row.sha256).bind(row.captured_at_device).bind(row.barcode_evidence).execute(&mut *tx).await?;
+        .bind(&row.sha256).bind(row.captured_at_device).bind(row.barcode_evidence).bind(row.complement).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO jobs (id, kind, capture_id) VALUES ($1, 'LABEL_RECOGNITION', $2)")
         .bind(Uuid::new_v4())
         .bind(id)

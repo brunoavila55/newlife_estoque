@@ -134,6 +134,7 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
 
       playSound('SHUTTER')
 
+      setNotes('')
       if (nextMode) {
         setSerialNumber('')
         setMacAddress('')
@@ -146,7 +147,6 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
         setSerialNumber('')
         setMacAddress('')
         setBarcode('')
-        setNotes('')
         setCurrentFile(null)
         if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl)
         setPreviewBlobUrl(null)
@@ -512,7 +512,8 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                       Ordem de Serviço (OS) ou Contrato
                       <input
                         type="text"
-                        placeholder="Ex: OS-10492 ou Nome do Cliente"
+                        placeholder="Ex: OS-10492"
+                        maxLength={160}
                         value={serviceOrder}
                         onChange={(e) => setServiceOrder(e.target.value)}
                       />
@@ -581,6 +582,17 @@ export function TechDesk({ profile, deny, syncing, run, leaveDesk }: TechDeskPro
                         onChange={(e) => setCablesPresent(e.target.checked)}
                       />
                       <span className="slider round" />
+                    </label>
+                  </div>
+
+                  <div className="form-group">
+                    <label>
+                      Observações do recolhimento
+                      <textarea
+                        maxLength={2000}
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                      />
                     </label>
                   </div>
 
