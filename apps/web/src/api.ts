@@ -13,6 +13,7 @@ export class ApiError extends Error {
 
 let session: (Session & { expiresAt: number }) | undefined
 let renewing: Promise<Session> | undefined
+const staffAccountKey = 'newlife-staff-account'
 const day = 24 * 3600 * 1000
 
 async function request<T>(path: string, input: RequestInit): Promise<T> {
@@ -54,8 +55,13 @@ async function remember(user: User): Promise<void> {
 
 export async function enter(login: string, password: string): Promise<User> {
   const fresh = await webSession('login', { login, password })
-  if ((fresh.user.role ?? 'technician') !== 'technician') await db.profiles.delete('current')
-  else await remember(fresh.user)
+  if (fresh.user.role === 'administrator' || fresh.user.role === 'warehouse_clerk') {
+    await db.profiles.delete('current')
+    sessionStorage.setItem(staffAccountKey, fresh.user.id)
+  } else {
+    sessionStorage.removeItem(staffAccountKey)
+    await remember(fresh.user)
+  }
   session = { ...fresh, expiresAt: Date.now() + fresh.expires_in * 1000 }
   return fresh.user
 }
@@ -66,7 +72,7 @@ export async function leave(): Promise<void> {
 }
 
 export async function lockDevice(): Promise<void> {
-  session = undefined
+  clearAccess()
   await db.profiles.delete('current')
 }
 
@@ -94,6 +100,23 @@ export async function resumeSession(owner: string): Promise<void> {
 
 export function clearAccess(): void {
   session = undefined
+  sessionStorage.removeItem(staffAccountKey)
+}
+
+export async function restoreStaff(): Promise<User | undefined> {
+  const owner = sessionStorage.getItem(staffAccountKey)
+  if (!owner || !navigator.onLine) return
+  try {
+    const fresh = await webSession('refresh')
+    if (fresh.user.id !== owner || (fresh.user.role !== 'administrator' && fresh.user.role !== 'warehouse_clerk')) {
+      clearAccess()
+      return
+    }
+    session = { ...fresh, expiresAt: Date.now() + fresh.expires_in * 1000 }
+    return fresh.user
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) clearAccess()
+  }
 }
 
 export async function authenticated<T>(owner: string, path: string, input: RequestInit = {}): Promise<T> {

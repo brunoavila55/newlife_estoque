@@ -13,8 +13,19 @@ const photo = {
 async function signIn(page: Page, login = technician.login) {
   await page.getByLabel('Login').fill(login)
   await page.getByLabel('Senha').fill('senha-de-teste-local')
-  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
+  await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Recolhimentos' })).toBeVisible()
+}
+
+function technicianNav(page: Page, name: string) {
+  return page.getByRole('navigation', { name: 'Área do técnico' }).getByRole('button', { name, exact: true })
+}
+
+async function saveFromGallery(page: Page, file = photo, serial?: string) {
+  await technicianNav(page, 'Registrar').click()
+  await page.locator('input[type=file]:not([capture])').setInputFiles(file)
+  if (serial) await page.getByLabel('Número de Série (SN)').fill(serial)
+  await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
 }
 
 test('mantém dez fotos offline após fechar a aba e retoma um envio interrompido', async ({ page, context }) => {
@@ -57,26 +68,27 @@ test('mantém dez fotos offline após fechar a aba e retoma um envio interrompid
   if (!await page.evaluate(() => Boolean(navigator.serviceWorker.controller))) await page.reload()
   await expect(page.getByRole('heading', { name: 'Recolhimentos' })).toBeVisible()
   await context.setOffline(true)
-  await expect(page.getByText('Sem conexão')).toBeVisible()
+  await expect(page.getByText('Sem conexão', { exact: true })).toBeVisible()
   for (let index = 1; index <= 10; index++) {
-    await page.locator('input[aria-label="Arquivo da foto"]').setInputFiles(photo)
-    await expect(page.getByText(`${index} pendente(s)`, { exact: true })).toBeVisible()
+    await saveFromGallery(page)
+    await expect(page.getByText(`${index} fotos pendentes`, { exact: true })).toBeVisible()
   }
   expect(ids.size).toBe(0)
 
   await page.close()
   const reopened = await context.newPage()
   await reopened.goto('/')
-  await expect(reopened.getByText('10 pendente(s)', { exact: true })).toBeVisible()
+  await technicianNav(reopened, 'Fila').click()
+  await expect(reopened.getByText('10 fotos pendentes', { exact: true })).toBeVisible()
   await expect(reopened.getByText('Aguardando envio', { exact: true })).toHaveCount(10)
   await reopened.evaluate(async () => { await Promise.all((await caches.keys()).map((key) => caches.delete(key))) })
-  await expect(reopened.getByText('10 pendente(s)', { exact: true })).toBeVisible()
+  await expect(reopened.getByText('10 fotos pendentes', { exact: true })).toBeVisible()
 
   await context.setOffline(false)
   await expect(reopened.getByText('Envio interrompido.', { exact: false })).toBeVisible()
   await reopened.getByRole('button', { name: 'Sincronizar agora' }).click()
-  await expect(reopened.getByText('0 pendente(s)', { exact: true })).toBeVisible()
-  await expect(reopened.getByText('Recebida · aguardando processamento', { exact: true })).toHaveCount(10)
+  await expect(reopened.getByText('0 fotos pendentes', { exact: true })).toBeVisible()
+  await expect(reopened.getByText('Recebida, aguardando processamento', { exact: true })).toHaveCount(10)
   expect(ids.size).toBe(10)
   expect(completed.size).toBe(10)
 })
@@ -97,15 +109,17 @@ test('protege a fila ao trocar de conta e exibe falha de cota', async ({ page, c
   await page.evaluate(() => {
     navigator.storage.estimate = async () => ({ usage: 0, quota: 10 })
   })
-  await page.locator('input[aria-label="Arquivo da foto"]').setInputFiles(photo)
-  await expect(page.getByText('Pouco espaço.', { exact: false })).toBeVisible()
-  await expect(page.getByText('0 pendente(s)', { exact: true })).toBeVisible()
+  await saveFromGallery(page)
+  await expect(page.getByText('Pouco espaço. Sincronize as fotos antes de liberar espaço no dispositivo.', { exact: true })).toBeVisible()
+  await technicianNav(page, 'Fila').click()
+  await expect(page.getByText('0 fotos pendentes', { exact: true })).toBeVisible()
 
   await page.evaluate(() => {
     navigator.storage.estimate = async () => ({ usage: 0, quota: 1024 ** 3 })
   })
-  await page.locator('input[aria-label="Arquivo da foto"]').setInputFiles(photo)
-  await expect(page.getByText('1 pendente(s)', { exact: true })).toBeVisible()
+  await technicianNav(page, 'Registrar').click()
+  await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
+  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
   await page.evaluate(() => {
     const add = IDBObjectStore.prototype.add
     IDBObjectStore.prototype.add = function (value, key) {
@@ -113,16 +127,19 @@ test('protege a fila ao trocar de conta e exibe falha de cota', async ({ page, c
       return add.call(this, value, key)
     }
   })
-  await page.locator('input[aria-label="Arquivo da foto"]').setInputFiles(photo)
-  await expect(page.getByText('A foto não foi salva.', { exact: false })).toBeVisible()
-  await expect(page.getByText('1 pendente(s)', { exact: true })).toBeVisible()
+  await saveFromGallery(page)
+  await expect(page.getByText('A foto não foi salva', { exact: false })).toBeVisible()
+  await technicianNav(page, 'Fila').click()
+  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Sair', exact: true }).click()
-  await page.getByRole('button', { name: 'Sair e manter fotos' }).click()
+  await page.getByRole('button', { name: 'Sair e Manter', exact: true }).click()
   await signIn(page, next.login)
-  await expect(page.getByText('0 pendente(s)', { exact: true })).toBeVisible()
+  await technicianNav(page, 'Fila').click()
+  await expect(page.getByText('0 fotos pendentes', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Sair', exact: true }).click()
   await signIn(page)
-  await expect(page.getByText('1 pendente(s)', { exact: true })).toBeVisible()
+  await technicianNav(page, 'Fila').click()
+  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
 })
 
 test('lê código por ZXing offline e aceita preenchimento manual', async ({ page, context }) => {
@@ -137,19 +154,16 @@ test('lê código por ZXing offline e aceita preenchimento manual', async ({ pag
   if (!await page.evaluate(() => Boolean(navigator.serviceWorker.controller))) await page.reload()
   await expect(page.getByRole('heading', { name: 'Recolhimentos' })).toBeVisible()
   await context.setOffline(true)
-  await page.getByText('Código da etiqueta (opcional)').click()
-  await page.getByLabel('Buscar código na foto').check()
   const qr = {
     name: 'qr-etiqueta.png', mimeType: 'image/png',
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAFcAAABXAQAAAABZs+TBAAAA3klEQVR4nM2TMW7CQBBF/yBLprILqkhG7BXoXERyjmS6dJADADfIWUyFO47ASr7AjisjWf5UKNWOyzDVFF9/5s/bFeJVXOCv/qsHA7BnAWymuF446hJ7mp4Xl22hy5m5cvazu+nOzWgqnzc+HywNJelv7kes7CSnlCSN7H27PsD1D8tnKjtteErjPqA2RV36urI0oWJAkRv7gMoxH6iM8wJJ6rU7wcqlIsfvdWfeUDhK439bZ3PXr8/a4JUAQHbpspuPvvkEAHp8rIK7m9yzMj2YLAKwG0ak8fvIm/3BJ3tAbMHKibfMAAAAAElFTkSuQmCC', 'base64'),
   }
-  await page.locator('input[aria-label="Arquivo da foto"]').setInputFiles(qr)
-  await expect(page.getByText('Código informado: NEWLIFE-00123')).toBeVisible()
+  await saveFromGallery(page, qr)
+  await expect(page.getByText('NEWLIFE-00123', { exact: true })).toBeVisible()
 
-  await page.getByLabel('Digitar código').fill('MANUAL-00234')
-  await page.locator('input[aria-label="Arquivo da foto"]').setInputFiles(photo)
-  await expect(page.getByText('Código informado: MANUAL-00234')).toBeVisible()
-  await expect(page.getByText('2 pendente(s)', { exact: true })).toBeVisible()
+  await saveFromGallery(page, photo, 'MANUAL-00234')
+  await expect(page.getByText('MANUAL-00234', { exact: true })).toBeVisible()
+  await expect(page.getByText('2 fotos pendentes', { exact: true })).toBeVisible()
 })
 
 test('lê pela câmera, confirma a foto offline e libera o dispositivo', async ({ page, context }) => {
@@ -175,15 +189,17 @@ test('lê pela câmera, confirma a foto offline e libera o dispositivo', async (
   await page.goto('/')
   await signIn(page)
   await context.setOffline(true)
-  await page.getByRole('button', { name: 'Abrir câmera com leitor' }).click()
-  await expect(page.getByText('Código na câmera: SN-00042')).toBeVisible()
+  await technicianNav(page, 'Registrar').click()
+  await page.getByRole('button', { name: 'Abrir câmera traseira' }).click()
+  await expect(page.getByText('Código: SN-00042')).toBeVisible()
   const track = await page.locator('video').evaluateHandle(video => (video.srcObject as MediaStream).getVideoTracks()[0])
-  await page.getByRole('button', { name: 'Fotografar etiqueta' }).click()
+  await page.getByRole('button', { name: 'Disparar Foto' }).click()
+  await page.getByRole('button', { name: 'Usar esta foto' }).click()
   await expect(page.getByText('Código na foto: SN-00042')).toBeVisible()
   await expect.poll(() => track.evaluate(t => t.readyState)).toBe('ended')
-  await page.getByRole('button', { name: 'Salvar coleta' }).click()
-  await expect(page.getByText('Código informado: SN-00042')).toBeVisible()
-  await expect(page.getByText('1 pendente(s)', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
+  await expect(page.getByText('SN-00042', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
 })
 
 test('preserva a foto pendente depois de atualizar o Service Worker', async ({ page, context }) => {
@@ -353,12 +369,12 @@ test('retoma pelo mesmo UUID quando a resposta da confirmação se perde', async
   })
   await page.goto('/')
   await signIn(page)
-  await page.locator('input[aria-label="Arquivo da foto"]').setInputFiles(photo)
+  await saveFromGallery(page)
   await expect(page.getByText('Envio interrompido.', { exact: false })).toBeVisible()
-  await expect(page.getByText('1 pendente(s)', { exact: true })).toBeVisible()
+  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
   preferredRetry = true
   await page.getByRole('button', { name: 'Sincronizar agora' }).click()
-  await expect(page.getByText('Recebida · aguardando processamento')).toBeVisible()
+  await expect(page.getByText('Recebida, aguardando processamento')).toBeVisible()
   expect(uploadRequests).toBe(1)
   expect(durableReceipts).toBe(1)
 })

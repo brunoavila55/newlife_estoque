@@ -75,7 +75,7 @@ export function LabelCamera({
           },
         })
         if (!active || !video.current) {
-          stop()
+          stream.getTracks().forEach(track => track.stop())
           return
         }
         streamRef.current = stream

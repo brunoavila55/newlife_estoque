@@ -79,7 +79,7 @@ export function ReviewDesk({ admin, denied }: { admin: User; denied: () => void 
   const listRequest = useRef(0)
 
   const fail = useCallback((error: unknown) => {
-    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) denied()
+    if (error instanceof ApiError && error.status === 401) denied()
     return errorMessage(error)
   }, [denied])
 

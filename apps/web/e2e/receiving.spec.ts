@@ -56,7 +56,8 @@ test('scanner Enter ou Tab registra a leitura e a confirmação física é separ
   await page.goto('/')
   await page.getByLabel('Login').fill('estoquista')
   await page.getByLabel('Senha').fill('senha-de-teste-local')
-  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
+  await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Módulos do estoque' }).getByRole('button', { name: 'Mesa de recebimento', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Recebimento de equipamentos' })).toBeVisible()
   await page.getByRole('combobox', { name: 'Técnico', exact: true }).selectOption(technician.id)
   await page.getByRole('button', { name: 'Abrir sessão' }).click()
@@ -131,7 +132,8 @@ test('pilha misturada encaminha cada etiqueta à sessão do técnico e exige con
   await page.goto('/')
   await page.getByLabel('Login').fill('estoquista')
   await page.getByLabel('Senha').fill('senha-de-teste-local')
-  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
+  await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Módulos do estoque' }).getByRole('button', { name: 'Mesa de recebimento', exact: true }).click()
   const field = page.getByLabel('Serial ou MAC da etiqueta')
   for (const code of ['B', 'A']) {
     await field.fill(code)
@@ -150,4 +152,58 @@ test('pilha misturada encaminha cada etiqueta à sessão do técnico e exige con
     await expect(page.getByRole('status').filter({ hasText: message })).toBeVisible()
   }
   expect(confirmed).toEqual(['B', 'A'])
+})
+
+test('preserva a sessão diante de falta de permissão e consulta o código da busca global', async ({ page, context }) => {
+  const clerk = { ...technician, role: 'warehouse_clerk', name: 'Estoquista', login: 'estoquista' }
+  const credentials = { access_token: 'mock-token', expires_in: 3600, user: clerk }
+  let refreshes = 0
+  let lookups = 0
+  await context.route('**/api/v1/**', route => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith('/login')) return route.fulfill({ json: credentials })
+    if (url.pathname.endsWith('/refresh')) {
+      refreshes++
+      return route.fulfill({ json: credentials })
+    }
+    if (url.pathname.endsWith('/warehouse/equipment/lookup')) {
+      lookups++
+      expect(url.searchParams.get('value')).toBe('0001-O')
+      return lookups === 1
+        ? route.fulfill({ status: 403, json: { code: 'FORBIDDEN', message: 'Você não tem permissão para esta operação.' } })
+        : route.fulfill({ json: { result: 'UNKNOWN' } })
+    }
+    if (url.pathname.endsWith('/receipt-sessions')) return route.fulfill({ json: { items: [], next_cursor: null } })
+    if (url.pathname.endsWith('/receipt-exceptions')) return route.fulfill({ json: {
+      items: [{ value: '0001-O', result: 'UNKNOWN', seen_at: '2026-11-23T14:00:00Z' }], next_cursor: null,
+    } })
+    if (url.pathname.endsWith('/logout')) return route.fulfill({ status: 204 })
+    return route.fulfill({ status: 404 })
+  })
+
+  await page.goto('/')
+  await page.getByLabel('Login').fill(clerk.login)
+  await page.getByLabel('Senha').fill('senha-de-teste-local')
+  await page.getByRole('button', { name: 'Entrar no Sistema' }).click()
+  const search = page.getByRole('searchbox', { name: 'Buscar por serial ou MAC' })
+  await search.fill('0001-O')
+  await search.press('Enter')
+  await expect(page.getByRole('alert')).toHaveText('Você não tem permissão para esta operação.')
+  await search.press('Enter')
+  await expect(page.getByRole('status')).toHaveText('Código desconhecido')
+  expect(refreshes).toBe(0)
+
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Visão geral' })).toBeVisible()
+  expect(refreshes).toBe(1)
+  const menu = page.getByRole('navigation', { name: 'Módulos do estoque' })
+  await menu.getByRole('button', { name: 'Histórico e comprovantes' }).click()
+  await expect(page.getByText('Nenhuma sessão registrada.')).toBeVisible()
+  await menu.getByRole('button', { name: 'Divergências' }).click()
+  await expect(page.getByText('0001-O', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Sair', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Entrar no Sistema' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Entrar no Sistema' })).toBeVisible()
+  expect(refreshes).toBe(1)
 })

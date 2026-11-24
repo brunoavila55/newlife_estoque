@@ -3,11 +3,19 @@ import { Icon } from '../components/icon'
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, storePhoto, freeSpace, type Capture, type Profile, type User } from '../db'
-import { preparePhoto } from '../photo'
+import { preparePhoto, readBarcode, validBarcode } from '../photo'
 import { LabelCamera } from '../label-camera'
 import type { BarcodeEvidence } from '../db'
 import { QRCodeSVG } from '../components/qrcode'
 import { playSound } from '../audio'
+
+const remoteQueueLabels: Record<string, string> = {
+  OCR_PENDING: 'Recebida, aguardando processamento',
+  OCR_PROCESSING: 'Processando etiqueta',
+  IDENTIFIED: 'Identificada',
+  NEEDS_REVIEW: 'Aguardando revisão',
+  OCR_FAILED: 'Falha na leitura da etiqueta',
+}
 
 const queueLabels: Record<Capture['state'], string> = {
   LOCAL_PENDING: 'Aguardando envio',
@@ -38,7 +46,7 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
   const [usedStorageMB, setUsedStorageMB] = useState<string>()
 
   // Capture & Complementary form state
-  const [barcode, setBarcode] = useState('')
+  const [scannedCode, setScannedCode] = useState<BarcodeEvidence>()
   const [macAddress, setMacAddress] = useState('')
   const [serialNumber, setSerialNumber] = useState('')
   const [selectedModel, setSelectedModel] = useState('Huawei EG8145V5')
@@ -104,15 +112,7 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
     setCurrentFile(file)
     setPreviewBlobUrl(URL.createObjectURL(file))
     setLiveCamera(false)
-
-    if (liveEvidence) {
-      const code = liveEvidence.raw_value.trim()
-      if (/^[0-9A-Fa-f]{12}$/.test(code.replace(/[:-]/g, ''))) {
-        handleMacChange(code)
-      } else {
-        setSerialNumber(code)
-      }
-    }
+    setScannedCode(liveEvidence)
   }
 
   async function handleSaveCapture() {
@@ -129,9 +129,13 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
       const photo = await preparePhoto(currentFile)
       const capturedAt = new Date().toISOString()
 
-      const evidence: BarcodeEvidence | undefined = barcode.trim()
-        ? { raw_value: barcode.trim(), source: 'MANUAL' }
-        : undefined
+      const manualCode = serialNumber.trim() || macAddress.trim()
+      if (manualCode && !validBarcode(manualCode)) {
+        throw new Error('Confira o código da etiqueta. Use até 128 bytes, sem caracteres de controle.')
+      }
+      const evidence: BarcodeEvidence | undefined = manualCode
+        ? { raw_value: manualCode, source: 'MANUAL' }
+        : scannedCode ?? await readBarcode(photo)
 
       await storePhoto(profile.id, photo, capturedAt, evidence, {
         model: selectedModel,
@@ -148,7 +152,7 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
       if (nextMode) {
         setSerialNumber('')
         setMacAddress('')
-        setBarcode('')
+        setScannedCode(undefined)
         setCurrentFile(null)
         if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl)
         setPreviewBlobUrl(null)
@@ -156,7 +160,7 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
       } else {
         setSerialNumber('')
         setMacAddress('')
-        setBarcode('')
+        setScannedCode(undefined)
         setCurrentFile(null)
         if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl)
         setPreviewBlobUrl(null)
@@ -166,7 +170,9 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
 
       void run(false)
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : 'Erro ao salvar captura.')
+      setNotice(err instanceof Error && err.name === 'QuotaExceededError'
+        ? 'A foto não foi salva por falta de espaço. Sincronize as fotos pendentes antes de liberar espaço.'
+        : err instanceof Error ? err.message : 'Erro ao salvar captura.')
     } finally {
       setSaving(false)
       void checkSpace()
@@ -384,6 +390,9 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
                     className="small-btn"
                     onClick={() => {
                       setCurrentFile(null)
+                      setScannedCode(undefined)
+                      setSerialNumber('')
+                      setMacAddress('')
                       if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl)
                       setPreviewBlobUrl(null)
                     }}
@@ -394,8 +403,11 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
 
                 <div className="captured-photo-thumb-wrap">
                   <img src={previewBlobUrl} alt="Etiqueta Capturada" className="captured-photo-img" />
-                  <span className="photo-tag">Foto Gravada</span>
+
                 </div>
+
+                {scannedCode && <p className="muted">Código na foto: <strong>{scannedCode.raw_value}</strong></p>}
+                <p className="muted small-text">O serial e o MAC são opcionais. Se você informar os dois, o serial será enviado como código complementar à foto.</p>
 
                 <form onSubmit={(e) => { e.preventDefault(); void handleSaveCapture() }} className="mobile-form-body">
                   <div className="form-group">
@@ -404,7 +416,7 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
                       <div className="input-with-badge">
                         <input
                           type="text"
-                          required
+                          maxLength={128}
                           className="mono"
                           placeholder="Ex: 48575443F89A1201"
                           value={serialNumber}
@@ -826,7 +838,7 @@ export function TechDesk({ profile, deny, connected, syncing, run, leaveDesk }: 
                     <div key={c.id} className="queue-item-card card">
                       <div className="queue-item-main">
                         <strong className={`badge ${c.state === 'UPLOADED' ? 'badge-success' : 'badge-warning'}`}>
-                          {queueLabels[c.state]}
+                          {(c.state === 'UPLOADED' && remoteQueueLabels[c.remoteStatus ?? '']) || queueLabels[c.state]}
                         </strong>
                         <span className="mono queue-serial">
                           {c.barcode?.raw_value || 'Sem código informado'}

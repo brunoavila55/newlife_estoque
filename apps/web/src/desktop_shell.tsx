@@ -1,20 +1,13 @@
 import { useState } from 'react'
-import type { Profile, User } from './db'
+import type { User } from './db'
 import { Sidebar, type DesktopModule } from './components/sidebar'
 import { Topbar } from './components/topbar'
 import { DashboardModule } from './modules/dashboard'
-import { ReceivingDesk } from './receiving'
-import { BatchesModule } from './modules/batches'
-import { CatalogModule } from './modules/catalog'
-import { TriageModule } from './modules/triage'
-import { DiscrepanciesModule } from './modules/discrepancies'
-import { InventoryWarehouseModule } from './modules/inventory_warehouse'
-import { ReportsModule } from './modules/reports'
+import { ReceivingDesk, EquipmentSearch, ReceiptExceptions } from './receiving'
 import { DiagnosticsModule } from './modules/diagnostics'
 import { ReviewDesk } from './review'
 import { AdminDesk } from './users'
 import { OnboardingModule } from './modules/onboarding'
-import { TechDesk } from './technician/tech_desk'
 
 interface DesktopShellProps {
   user: User
@@ -25,102 +18,43 @@ interface DesktopShellProps {
 
 export function DesktopShell({ user, denied, exit, connected }: DesktopShellProps) {
   const [currentModule, setCurrentModule] = useState<DesktopModule>('dashboard')
-  const [isMobilePreview, setIsMobilePreview] = useState(false)
+  const [lookup, setLookup] = useState<{ query: string; sequence: number }>()
+  const administrator = user.role === 'administrator'
 
-  function handleQuickSearch(query: string) {
-    if (query.toUpperCase().startsWith('LOTE-') || query.toUpperCase().startsWith('REM-')) {
-      setCurrentModule('batches')
-    } else {
-      setCurrentModule('catalog')
-    }
+  function navigate(module: DesktopModule) {
+    setLookup(undefined)
+    setCurrentModule(module)
   }
 
-  const simulatedProfile: Profile = {
-    id: user.id,
-    name: user.name,
-    login: user.login,
-    role: user.role,
-    slot: 'current',
-    offlineUntil: Date.now() + 24 * 3600 * 1000,
+  function search(query: string) {
+    setLookup(previous => ({ query, sequence: (previous?.sequence ?? 0) + 1 }))
+    setCurrentModule('catalog')
   }
 
   return (
     <div className="desktop-shell-layout">
-      <Sidebar
-        currentModule={currentModule}
-        onSelectModule={(mod) => {
-          setIsMobilePreview(false)
-          setCurrentModule(mod)
-        }}
-        user={user}
-        onLogout={() => void exit()}
-      />
-
+      <Sidebar currentModule={currentModule} onSelectModule={navigate} user={user} onLogout={() => void exit()} />
       <div className="desktop-main-column">
-        <Topbar
-          user={user}
-          connected={connected}
-          onNavigate={(mod) => {
-            setIsMobilePreview(false)
-            setCurrentModule(mod)
-          }}
-          onQuickSearch={handleQuickSearch}
-          isMobilePreview={isMobilePreview}
-          onToggleMobilePreview={() => setIsMobilePreview(!isMobilePreview)}
-        />
-
+        <Topbar connected={connected} onQuickSearch={administrator ? undefined : search} />
         <main className="desktop-main-wrapper">
-          {isMobilePreview ? (
-            <div className="mobile-simulator-wrapper">
-              <div className="phone-mockup-frame">
-                <TechDesk
-                  profile={simulatedProfile}
-                  deny={denied}
-                  connected={connected}
-                  syncing={false}
-                  run={async () => {}}
-                  leaveDesk={exit}
-                />
-              </div>
-            </div>
-          ) : (
-            <>
-              {currentModule === 'dashboard' && (
-                <DashboardModule onNavigate={setCurrentModule} />
-              )}
-
-              {currentModule === 'receiving' && (
-                <ReceivingDesk clerk={user} denied={denied} exit={exit} />
-              )}
-
-              {currentModule === 'batches' && (
-                <BatchesModule
-                  user={user}
-                  onOpenSession={() => {
-                    setCurrentModule('receiving')
-                  }}
-                />
-              )}
-
-              {currentModule === 'catalog' && <CatalogModule user={user} />}
-
-              {currentModule === 'triage' && <TriageModule user={user} />}
-
-              {currentModule === 'discrepancies' && <DiscrepanciesModule user={user} />}
-
-              {currentModule === 'inventory_warehouse' && <InventoryWarehouseModule user={user} />}
-
-              {currentModule === 'reports' && <ReportsModule user={user} />}
-
-              {currentModule === 'diagnostics' && <DiagnosticsModule />}
-
-              {currentModule === 'review' && <ReviewDesk admin={user} denied={denied} />}
-
-              {currentModule === 'users' && <AdminDesk admin={user} denied={denied} exit={exit} />}
-
-              {currentModule === 'onboarding' && <OnboardingModule />}
-            </>
-          )}
+          {currentModule === 'dashboard' && <DashboardModule administrator={administrator} onNavigate={navigate} />}
+          {!administrator && <>
+            {(currentModule === 'receiving' || currentModule === 'history') &&
+              <ReceivingDesk key={currentModule} clerk={user} denied={denied} exit={exit}
+                initialModule={currentModule === 'history' ? 'history' : 'receive'} />}
+            {currentModule === 'catalog' && <>
+              <h1>Rastreamento de equipamentos</h1>
+              <EquipmentSearch key={lookup?.sequence} owner={user.id} denied={denied} initialCode={lookup?.query} />
+            </>}
+            {currentModule === 'discrepancies' && <>
+              <h1>Divergências</h1>
+              <ReceiptExceptions owner={user.id} denied={denied} />
+            </>}
+            {currentModule === 'diagnostics' && <DiagnosticsModule />}
+          </>}
+          {administrator && currentModule === 'review' && <ReviewDesk admin={user} denied={denied} />}
+          {administrator && currentModule === 'users' && <AdminDesk admin={user} denied={denied} exit={exit} />}
+          {currentModule === 'onboarding' && <OnboardingModule />}
         </main>
       </div>
     </div>

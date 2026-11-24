@@ -63,7 +63,7 @@ async function drain(owner: string, force: boolean, exclusive: boolean): Promise
       await send(capture)
     } catch (error) {
       const status = error instanceof ApiError ? error.status : 0
-      const authRequired = status === 401 || status === 403
+      const authRequired = status === 401
       const permanent = status >= 400 && status < 500 && status !== 408 && status !== 429
         && !(error instanceof ApiError && error.code === 'IMAGE_NOT_READY')
       const delay = Math.min(5 * 60_000, 2 ** Math.min(capture.attempts, 10) * 1_000)

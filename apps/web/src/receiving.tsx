@@ -77,13 +77,15 @@ function jsonPost(body: object): RequestInit {
   return { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
 }
 
-export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: () => void; exit: () => Promise<void> }) {
+export function ReceivingDesk({ clerk, denied, exit, initialModule = 'receive' }: {
+  clerk: User; denied: () => void; exit: () => Promise<void>; initialModule?: 'receive' | 'history'
+}) {
   const [sessions, setSessions] = useState<Page<Session>>()
   const [technicians, setTechnicians] = useState<Page<Technician>>()
   const [search, setSearch] = useState('')
   const [searched, setSearched] = useState('')
   const [selected, setSelected] = useState<string>()
-  const [module, setModule] = useState<'receive' | 'balances' | 'history' | 'lookup'>('receive')
+  const [module, setModule] = useState<'receive' | 'balances' | 'history' | 'lookup' | 'exceptions'>(initialModule)
   const [technician, setTechnician] = useState('')
   const [opening, setOpening] = useState(false)
   const [findingTechnicians, setFindingTechnicians] = useState(false)
@@ -92,7 +94,7 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
   const pendingOpen = useRef<{ technician_id: string; client_session_id: string } | undefined>(undefined)
 
   const fail = useCallback((failure: unknown) => {
-    if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) denied()
+    if (failure instanceof ApiError && failure.status === 401) denied()
     return failure instanceof ApiError ? failure.message : 'Não foi possível acessar o servidor. Tente novamente.'
   }, [denied])
 
@@ -125,8 +127,11 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
 
   useEffect(() => {
     void loadSessions()
-    void loadTechnicians()
-  }, [loadSessions, loadTechnicians])
+  }, [loadSessions])
+
+  useEffect(() => {
+    if (module === 'receive' || module === 'balances') void loadTechnicians()
+  }, [module, loadTechnicians])
 
   async function open(event: FormEvent) {
     event.preventDefault()
@@ -157,11 +162,14 @@ export function ReceivingDesk({ clerk, denied, exit }: { clerk: User; denied: ()
     {selected ? <ReceiptSession key={selected} owner={clerk.id} clerkName={clerk.name} id={selected} fail={fail}
       back={() => { setSelected(undefined); void loadSessions(); void loadTechnicians(searched) }} /> : <div className="desk-grid">
       <nav className="desk-modules" aria-label="Área do estoque">
-        {([['receive', 'Receber pilha'], ['balances', 'Saldos por técnico'], ['lookup', 'Buscar equipamento'], ['history', 'Sessões e comprovantes']] as const).map(([key, title]) =>
+        {([['receive', 'Receber pilha'], ['balances', 'Saldos por técnico'], ['lookup', 'Buscar equipamento'], ['history', 'Sessões e comprovantes'], ['exceptions', 'Etiquetas pendentes']] as const).map(([key, title]) =>
           <button key={key} aria-pressed={module === key} onClick={() => setModule(key)}>{title}</button>)}
       </nav>
-      <div hidden={module !== 'receive'}><MixedDesk owner={clerk.id} fail={fail} refresh={() => { void loadSessions(); void loadTechnicians(searched) }} /></div>
-      {module === 'lookup' && <EquipmentSearch owner={clerk.id} fail={fail} />}
+      {module === 'receive' && <MixedDesk owner={clerk.id} fail={fail}
+        refresh={() => { void loadSessions(); void loadTechnicians(searched) }}
+        showExceptions={() => setModule('exceptions')} />}
+      {module === 'exceptions' && <ReceiptExceptions owner={clerk.id} denied={denied} />}
+      {module === 'lookup' && <EquipmentSearch owner={clerk.id} denied={denied} />}
       {(module === 'receive' || module === 'balances') && <section className="card task-panel">
         <h2>{module === 'balances' ? 'Custódia em campo' : 'Abrir recebimento'}</h2>
         {module === 'balances' && <ul className="items">{technicians?.items.map(t =>
@@ -207,31 +215,84 @@ type Lookup = { result: 'MATCHED'; equipment_id: string; technician_id: string; 
   | { result: 'UNKNOWN' | 'AMBIGUOUS' | 'ALREADY_RECEIVED'; review_candidates?: {capture_id: string; technician_name: string}[] }
 type MixedItem = { code: string; technician: string; session: string; equipment: string; scan: string }
 
-function EquipmentSearch({ owner, fail }: { owner: string; fail: (failure: unknown) => string }) {
-  const [result, setResult] = useState<{ result: string; history?: {type: string; at: string; holder: string}[] }>()
-  const [busy, setBusy] = useState(false)
+type Trace = { result: string; history?: { type: string; at: string; holder: string }[] }
+
+export function EquipmentSearch({ owner, denied, initialCode }: {
+  owner: string; denied: () => void; initialCode?: string
+}) {
+  const [code, setCode] = useState(initialCode ?? '')
+  const [query, setQuery] = useState(initialCode ? { value: initialCode } : undefined)
+  const [result, setResult] = useState<Trace>()
+  const [busy, setBusy] = useState(Boolean(initialCode))
   const [error, setError] = useState('')
+  useEffect(() => {
+    if (!query) return
+    let cancelled = false
+    void warehouse<Trace>(owner, '/warehouse/equipment/lookup?value=' + encodeURIComponent(query.value))
+      .then(data => { if (!cancelled) setResult(data) })
+      .catch(failure => {
+        if (cancelled) return
+        if (failure instanceof ApiError && failure.status === 401) denied()
+        setError(failure instanceof ApiError ? failure.message : 'Não foi possível consultar o equipamento. Tente novamente.')
+      })
+      .finally(() => { if (!cancelled) setBusy(false) })
+    return () => { cancelled = true }
+  }, [denied, owner, query])
+
   return <section className="card"><h2>Histórico de custódia</h2>
-    <form className="receipt-form" onSubmit={async event => {
+    <form className="receipt-form" onSubmit={event => {
       event.preventDefault()
-      if (busy) return
-      const value = String(new FormData(event.currentTarget).get('code')).trim()
+      if (busy || !code.trim()) return
       setBusy(true); setResult(undefined); setError('')
-      try { setResult(await warehouse(owner, '/warehouse/equipment/lookup?value=' + encodeURIComponent(value))) }
-      catch (failure) { setError(fail(failure)) } finally { setBusy(false) }
+      setQuery({ value: code.trim() })
     }}>
-      <label>Serial ou MAC<input name="code" autoFocus required maxLength={128} disabled={busy} /></label>
-      <button disabled={busy}>Consultar histórico</button>
+      <label>Serial ou MAC<input value={code} onChange={event => setCode(event.target.value)} autoFocus={!initialCode} required maxLength={128} disabled={busy} /></label>
+      <button disabled={busy}>{busy ? 'Consultando…' : 'Consultar histórico'}</button>
     </form>
-    {error && <p role="alert">{error}</p>}
-    {result && <p role="status">{outcomes[result.result]}</p>}
-    {result?.history && <ol>{result.history.map((movement, index) => <li key={index}>
+    {error && <p role="alert" className="alert">{error}</p>}
+    {result && <p role="status">{outcomes[result.result] ?? 'Resultado indisponível.'}</p>}
+    {!!result?.history?.length && <ol>{result.history.map((movement, index) => <li key={index}>
       {dateTime.format(new Date(movement.at))} · {movement.type === 'WAREHOUSE_RECEIVED' ? 'Recebido no estoque' : 'Coleta validada'} · {movement.holder}
     </li>)}</ol>}
   </section>
 }
 
-function MixedDesk({ owner, fail, refresh }: { owner: string; fail: (error: unknown) => string; refresh: () => void }) {
+export function ReceiptExceptions({ owner, denied }: { owner: string; denied: () => void }) {
+  type Entry = { value: string; result: string; seen_at: string }
+  const [page, setPage] = useState<Page<Entry>>()
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const load = useCallback(async (after?: string) => {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await warehouse<Page<Entry>>(owner, '/receipt-exceptions' + (after ? '?after=' + encodeURIComponent(after) : ''))
+      setPage(previous => after && previous ? { ...data, items: [...previous.items, ...data.items] } : data)
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.status === 401) denied()
+      setError(failure instanceof ApiError ? failure.message : 'Não foi possível carregar as divergências. Tente novamente.')
+    } finally { setLoading(false) }
+  }, [owner, denied])
+
+  useEffect(() => { void load() }, [load])
+  return <section className="card">
+    <div className="section-head"><h2>Etiquetas pendentes</h2>
+      <button disabled={loading} onClick={() => void load()}>Atualizar pendências</button>
+    </div>
+    {error && <p className="alert" role="alert">{error}</p>}
+    {loading && !page && <p role="status">Carregando pendências…</p>}
+    {page && (page.items.length === 0 ? <p>Nenhuma etiqueta pendente.</p> : <ul className="items">
+      {page.items.map(entry => <li key={entry.value}>
+        <strong>{entry.value}</strong><br />{outcomes[entry.result] ?? 'Divergência'} · {dateTime.format(new Date(entry.seen_at))}
+      </li>)}
+    </ul>)}
+    {page?.next_cursor && <button disabled={loading} onClick={() => void load(page.next_cursor!)}>Mais pendências</button>}
+  </section>
+}
+
+function MixedDesk({ owner, fail, refresh, showExceptions }: {
+  owner: string; fail: (error: unknown) => string; refresh: () => void; showExceptions: () => void
+}) {
   const [code, setCode] = useState('')
   const [pending, setPending] = useState<MixedItem>()
   const [message, setMessage] = useState('')
@@ -243,17 +304,6 @@ function MixedDesk({ owner, fail, refresh }: { owner: string; fail: (error: unkn
     if (busy) return
     if (!pending) scanner.current?.focus()
   }, [busy, pending])
-
-  const [exceptions, setExceptions] = useState<Page<{ value: string; result: string; seen_at: string }>>()
-  const [loadingExceptions, setLoadingExceptions] = useState(false)
-  async function loadExceptions(after?: string) {
-    setLoadingExceptions(true)
-    try {
-      const page = await warehouse<NonNullable<typeof exceptions>>(owner, '/receipt-exceptions' + (after ? '?after=' + encodeURIComponent(after) : ''))
-      setExceptions(previous => after && previous ? { ...page, items: [...previous.items, ...page.items] } : page)
-    } catch (failure) { setError(fail(failure)) }
-    finally { setLoadingExceptions(false) }
-  }
 
   async function lookup(event: FormEvent, value = code.trim()) {
     event.preventDefault()
@@ -289,7 +339,6 @@ function MixedDesk({ owner, fail, refresh }: { owner: string; fail: (error: unkn
         } else setMessage(outcomes[scan.result] || 'Confira o equipamento na sessão.')
         refresh()
       }
-      if (exceptions) await loadExceptions()
       retry.current = undefined
       setCode('')
     } catch (failure) { setError(fail(failure)) }
@@ -322,17 +371,7 @@ function MixedDesk({ owner, fail, refresh }: { owner: string; fail: (error: unkn
       <button disabled={busy} onClick={() => { setPending(undefined); setError('') }}>Voltar sem confirmar</button>
     </div>}
     {message && <p role="status">{message}</p>}
-    <button disabled={busy || loadingExceptions} onClick={() => void loadExceptions()}>
-      {exceptions ? 'Atualizar pendências' : 'Ver minhas etiquetas pendentes'}
-    </button>
-    {exceptions && <div><h3>Minhas etiquetas pendentes</h3>
-      {!exceptions.items.length && <p>Nenhuma etiqueta pendente.</p>}
-      <ul className="items">{exceptions.items.map(entry => <li key={entry.value} className="queue-row">
-        <div><strong>{entry.value}</strong><br />{outcomes[entry.result]} · {dateTime.format(new Date(entry.seen_at))}</div>
-        <button disabled={busy || loadingExceptions || !!pending} onClick={event => void lookup(event, entry.value)}>Consultar novamente</button>
-      </li>)}</ul>
-      {exceptions.next_cursor && <button disabled={busy || loadingExceptions} onClick={() => void loadExceptions(exceptions.next_cursor!)}>Mais pendências</button>}
-    </div>}
+    <button disabled={busy || !!pending} onClick={showExceptions}>Ver minhas etiquetas pendentes</button>
     {error && <p className="alert" role="alert">{error}</p>}
   </section>
 }

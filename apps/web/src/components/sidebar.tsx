@@ -6,12 +6,9 @@ import type { User } from '../db'
 export type DesktopModule =
   | 'dashboard'
   | 'receiving'
-  | 'batches'
+  | 'history'
   | 'catalog'
-  | 'triage'
   | 'discrepancies'
-  | 'inventory_warehouse'
-  | 'reports'
   | 'diagnostics'
   | 'review'
   | 'users'
@@ -36,21 +33,20 @@ const roleNames: Record<UserRole, string> = {
 export function Sidebar({ currentModule, onSelectModule, user, onLogout }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const role = (user.role ?? 'warehouse_clerk') as UserRole
-  const isAdminOrSuper = role === 'administrator' || role === 'supervisor' || role === 'platform_admin'
-
-  const menuItems: { id: DesktopModule; label: string; icon: IconName; adminOnly?: boolean }[] = [
+  const admin = role === 'administrator'
+  const menuItems: { id: DesktopModule; label: string; icon: IconName }[] = [
     { id: 'dashboard', label: 'Visão geral', icon: 'home' },
-    { id: 'receiving', label: 'Mesa de recebimento', icon: 'scan' },
-    { id: 'batches', label: 'Lotes e entregas', icon: 'list' },
-    { id: 'catalog', label: 'Catálogo e rastreamento', icon: 'search' },
-    { id: 'triage', label: 'Triagem', icon: 'tools' },
-    { id: 'discrepancies', label: 'Divergências', icon: 'alert' },
-    { id: 'inventory_warehouse', label: 'Estoque e transferências', icon: 'building' },
-    { id: 'reports', label: 'Relatórios', icon: 'file' },
-    { id: 'diagnostics', label: 'Teste de leitor', icon: 'scan' },
-    { id: 'review', label: 'Revisão de OCR', icon: 'camera', adminOnly: true },
-    { id: 'users', label: 'Usuários e permissões', icon: 'users', adminOnly: true },
-    { id: 'onboarding', label: 'Configuração e ajuda', icon: 'help' },
+    ...(admin ? [
+      { id: 'review', label: 'Revisão de OCR', icon: 'camera' },
+      { id: 'users', label: 'Usuários e permissões', icon: 'users' },
+    ] as const : [
+      { id: 'receiving', label: 'Mesa de recebimento', icon: 'scan' },
+      { id: 'history', label: 'Histórico e comprovantes', icon: 'file' },
+      { id: 'catalog', label: 'Rastreamento', icon: 'search' },
+      { id: 'discrepancies', label: 'Divergências', icon: 'alert' },
+      { id: 'diagnostics', label: 'Teste de leitor', icon: 'scan' },
+    ] as const),
+    { id: 'onboarding', label: 'Ajuda', icon: 'help' },
   ]
 
   return (
@@ -71,7 +67,6 @@ export function Sidebar({ currentModule, onSelectModule, user, onLogout }: Sideb
 
       <nav id="warehouse-navigation" className="sidebar-menu" aria-label="Módulos do estoque">
         {menuItems.map((item) => {
-          if (item.adminOnly && !isAdminOrSuper) return null
           const isActive = currentModule === item.id
           return (
             <button

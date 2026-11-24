@@ -50,7 +50,7 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
   const [listError, setListError] = useState('')
 
   const fail = useCallback((failure: unknown) => {
-    if (failure instanceof ApiError && [401, 403].includes(failure.status)) denied()
+    if (failure instanceof ApiError && failure.status === 401) denied()
     return errorMessage(failure)
   }, [denied])
 
@@ -122,7 +122,7 @@ function UserRegistration({ owner, denied }: { owner: string; denied: () => void
       form.reset()
       setCreated('Conta criada para ' + user.name + ' (' + user.login + ').')
     } catch (failure) {
-      if (failure instanceof ApiError && [401, 403].includes(failure.status)) denied()
+      if (failure instanceof ApiError && failure.status === 401) denied()
       setFormError(errorMessage(failure))
     } finally {
       setSaving(false)

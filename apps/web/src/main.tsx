@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { registerSW } from 'virtual:pwa-register'
-import { ApiError, clearAccess, enter, leave, lockDevice, resumeSession } from './api'
+import { ApiError, clearAccess, enter, leave, lockDevice, restoreStaff, resumeSession } from './api'
 import { db, seedInitialDataIfNeeded, type Profile, type User } from './db'
 import { TechDesk } from './technician/tech_desk'
 import { DesktopShell } from './desktop_shell'
@@ -117,6 +117,7 @@ function App() {
   const [connected, setConnected] = useState(navigator.onLine)
   const [authDenied, setAuthDenied] = useState(false)
   const [staff, setStaff] = useState<User>()
+  const [restoringStaff, setRestoringStaff] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState('')
   const [clock, setClock] = useState(Date.now())
@@ -125,7 +126,7 @@ function App() {
   const [update, setUpdate] = useState(false)
   const updater = useRef<(reload?: boolean) => Promise<void>>(async () => {})
   const running = useRef(false)
-  const owner = staff ? undefined : profile?.id
+  const owner = staff || restoringStaff ? undefined : profile?.id
 
   const deny = useCallback(() => {
     setAuthDenied(true)
@@ -147,13 +148,13 @@ function App() {
           try {
             await resumeSession(owner)
           } catch (failure) {
-            if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) {
+            if (failure instanceof ApiError && failure.status === 401) {
               throw failure
             }
           }
         }
       } catch (failure) {
-        if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) {
+        if (failure instanceof ApiError && failure.status === 401) {
           deny()
         } else {
           setError(message(failure))
@@ -165,6 +166,10 @@ function App() {
     },
     [owner, authDenied, deny]
   )
+
+  useEffect(() => {
+    void restoreStaff().then(setStaff).finally(() => setRestoringStaff(false))
+  }, [])
 
   useEffect(() => {
     void seedInitialDataIfNeeded()
@@ -253,7 +258,7 @@ function App() {
   }
 
   // 2. Carregando perfil inicial
-  if (profile === undefined) {
+  if (profile === undefined || restoringStaff) {
     return (
       <div className="app-loading-screen">
         <p>Carregando sistema New Life…</p>
