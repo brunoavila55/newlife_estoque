@@ -51,13 +51,8 @@ export function Sidebar({ currentModule, onSelectModule, user, onLogout }: Sideb
   return (
     <aside className="app-sidebar no-print" data-menu-open={menuOpen}>
       <div className="sidebar-brand">
-        <div className="brand-logo-wrapper">
-          <img src="/icons/new-life-logo.png" alt="New Life" className="brand-logo-img" />
-        </div>
-        <div className="brand-text-block">
-          <span className="brand-title">New Life</span>
-          <span className="brand-subtitle">Controle de equipamentos</span>
-        </div>
+        <img src="/icons/new-life-logo.png" alt="New Life" className="warehouse-wordmark" />
+        <span className="warehouse-wordmark-label">Estoque</span>
         <button type="button" className="menu-toggle" aria-controls="warehouse-navigation"
           aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>
           <Icon name={menuOpen ? 'close' : 'menu'} /> Menu

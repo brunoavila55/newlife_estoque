@@ -6,6 +6,7 @@ import { ApiError, clearAccess, enter, leave, lockDevice, restoreStaff, resumeSe
 import { db, seedInitialDataIfNeeded, type Profile, type User } from './db'
 import { TechDesk } from './technician/tech_desk'
 import { DesktopShell } from './desktop_shell'
+import { Icon } from './components/icon'
 import './style.css'
 
 type InstallEvent = Event & { prompt(): Promise<void> }
@@ -21,7 +22,7 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : 'Não foi possível concluir a operação.'
 }
 
-function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user: User) => void }) {
+function Login({ reauthenticate, connected, done }: { connected: boolean; reauthenticate: boolean; done: (user: User) => void }) {
   const [loginInput, setLoginInput] = useState('')
   const [passwordInput, setPasswordInput] = useState('')
   const [notice, setNotice] = useState('')
@@ -46,15 +47,20 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
   }
 
   return (
-    <section className="login">
-      <div className="login-brand">
-        <div className="logo-tile">
-          <img src="/icons/new-life-logo.png" alt="New Life" width="560" height="313" />
+    <>
+      <header className="access-header">
+        <div className="access-brand"><img src="/icons/new-life-logo.png" alt="New Life" /><span>Portal de operações</span></div>
+        <span className="connection" data-online={connected}>{connected ? 'Online' : 'Offline'}</span>
+      </header>
+      <section className="login">
+        <div className="field-poster">
+          <div className="poster-title"><Icon name="scan" /><h2>Controle de<br />equipamentos</h2></div>
+          <div className="bench-photo" role="img" aria-label="Roteador com etiqueta de identificação e cabo de rede na bancada" />
+          <div className="poster-route"><span>Coleta</span><i /><span>Conferência</span><i /><span>Estoque</span></div>
         </div>
-        <p>Controle de recolhimento e devolução</p>
-      </div>
       <div className="login-panel">
-        <h1>{reauthenticate ? 'Entre novamente' : 'Entrar no New Life'}</h1>
+        <div className="access-symbol"><Icon name="box" /></div>
+        <h1>{reauthenticate ? 'Entre novamente' : 'Acesse sua conta'}</h1>
         <p>
           {reauthenticate
             ? 'As coletas e fotos salvas ficam vinculadas à conta que as registrou.'
@@ -66,6 +72,7 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
             Login
             <input
               name="login"
+              placeholder="Seu login"
               value={loginInput}
               onChange={(e) => setLoginInput(e.target.value)}
               autoComplete="username"
@@ -77,6 +84,7 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
             Senha
             <input
               name="password"
+              placeholder="Sua senha"
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
@@ -85,7 +93,7 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
             />
           </label>
           <button className="primary" disabled={busy}>
-            {busy ? 'Entrando…' : 'Entrar no Sistema'}
+            {busy ? 'Entrando…' : 'Entrar no Sistema'} <Icon name="next" />
           </button>
         </form>
 
@@ -97,6 +105,7 @@ function Login({ reauthenticate, done }: { reauthenticate: boolean; done: (user:
 
       </div>
     </section>
+    </>
   )
 }
 
@@ -274,6 +283,7 @@ function App() {
         <main className="login-page">
           <Login
             reauthenticate={!!profile}
+            connected={connected}
             done={(user) => {
               if (user.role === 'administrator' || user.role === 'warehouse_clerk') {
                 setStaff(user)
