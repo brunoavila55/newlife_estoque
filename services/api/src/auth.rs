@@ -118,9 +118,9 @@ async fn password_work<T: Send + 'static>(
 }
 
 pub async fn hash_password(password: String) -> Result<String, ApiError> {
-    if password.chars().count() < 12 || password.len() > 256 {
+    if password.chars().count() < 6 || password.len() > 256 {
         return Err(ApiError::invalid(
-            "Use uma senha com pelo menos 12 caracteres e até 256 bytes.",
+            "Use uma senha com pelo menos 6 caracteres e até 256 bytes.",
         ));
     }
     password_work(move || {

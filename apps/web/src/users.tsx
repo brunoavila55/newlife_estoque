@@ -166,8 +166,8 @@ function UserRegistration({ owner, denied }: { owner: string; denied: () => void
           <label>Login<input name="login" required minLength={3} maxLength={64} pattern={String.raw`[A-Za-z0-9_.\x2d]{3,64}`} autoCapitalize="none" autoComplete="off" aria-describedby="login-format" /></label>
           <small id="login-format">Use letras sem acento, números, ponto, hífen ou sublinhado.</small>
           <label>Perfil<select name="role"><option value="technician">Técnico</option><option value="warehouse_clerk">Estoquista</option></select></label>
-          <label>Senha inicial<input name="password" type="password" required minLength={12} autoComplete="new-password" aria-describedby="password-format" /></label>
-          <small id="password-format">Use pelo menos 12 caracteres.</small>
+          <label>Senha inicial<input name="password" type="password" required minLength={6} autoComplete="new-password" aria-describedby="password-format" /></label>
+          <small id="password-format">Use pelo menos 6 caracteres.</small>
           <button className="primary" type="submit">{saving ? 'Criando usuário…' : 'Criar usuário'}</button>
         </fieldset>
       </form>
@@ -280,8 +280,8 @@ function UserManager({ owner, user, fail, close, changed }: {
         <p className="muted">A nova senha passa a valer imediatamente e todas as sessões da pessoa são encerradas.</p>
         <fieldset className="user-fields" disabled={busy}>
           <label>Nova senha<input type={revealed ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)}
-            required minLength={12} autoComplete="new-password" aria-describedby="reset-format" /></label>
-          <small id="reset-format">Use pelo menos 12 caracteres.</small>
+            required minLength={6} autoComplete="new-password" aria-describedby="reset-format" /></label>
+          <small id="reset-format">Use pelo menos 6 caracteres.</small>
           <div className="actions">
             <button type="button" className="small-btn" onClick={() => { setPassword(generatedPassword()); setRevealed(true) }}>Gerar senha</button>
             <button type="button" className="small-btn" onClick={() => setRevealed(!revealed)}>{revealed ? 'Ocultar' : 'Mostrar'}</button>
