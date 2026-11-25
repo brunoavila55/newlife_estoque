@@ -10,11 +10,13 @@ type Caps = MediaTrackCapabilities & {
   exposureMode?: string[]
   pointsOfInterest?: unknown
   zoom?: { min: number; max: number; step?: number }
+  focusDistance?: { min: number; max: number }
   torch?: boolean
 }
 type Extra = MediaTrackConstraintSet & Record<string, unknown>
 
-const CAMERA_KEY = 'label-camera-device'
+// v2: a escolha automática mudou; ignora lentes salvas pela versão anterior.
+const CAMERA_KEY = 'label-camera-device-v2'
 
 function capabilities(track?: MediaStreamTrack): Caps {
   try {
@@ -40,10 +42,48 @@ async function tune(track: MediaStreamTrack) {
   if (caps.exposureMode?.includes('continuous')) await apply(track, { exposureMode: 'continuous' })
 }
 
-/** Lente traseira sem foco automático costuma ser a ultra-angular, que não foca de perto. */
-function fixedFocus(track: MediaStreamTrack) {
-  const modes = capabilities(track).focusMode
-  return !!modes && !modes.includes('continuous') && !modes.includes('single-shot')
+const VIDEO = { width: { ideal: 1920 }, height: { ideal: 1080 } }
+
+function backCameras(devices: MediaDeviceInfo[]) {
+  return devices.filter((item) => item.kind === 'videoinput' && !/front|frontal|user|facetime|selfie/i.test(item.label))
+}
+
+/**
+ * Celulares com várias lentes traseiras expõem principal, ultra-angular e teleobjetiva.
+ * Só a principal foca de perto; o navegador nem sempre abre ela. Abre cada lente uma
+ * vez, compara foco automático e distância mínima de foco e fica com a melhor.
+ */
+async function pickBackCamera(devices: MediaDeviceInfo[]) {
+  let best: { id: string; score: number } | undefined
+  for (const [index, device] of devices.entries()) {
+    let stream: MediaStream | undefined
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { deviceId: { exact: device.deviceId }, ...VIDEO } })
+      const caps = capabilities(stream.getVideoTracks()[0])
+      const autofocus = caps.focusMode?.includes('continuous') ?? false
+      const nearest = caps.focusDistance?.min ?? 0.1
+      const width = Number(caps.width?.max ?? 0)
+      // Foco automático manda; depois, quem foca mais perto; depois, resolução; empate: ordem do sistema.
+      const score = (autofocus ? 1_000_000 : 0) - Math.round(nearest * 10_000) + Math.min(width, 9999) / 10 - index
+      if (!best || score > best.score) best = { id: device.deviceId, score }
+    } catch {
+      // Lente ocupada ou indisponível: ignora.
+    } finally {
+      stream?.getTracks().forEach((item) => item.stop())
+    }
+  }
+  return best?.id
+}
+
+function describe(track: MediaStreamTrack) {
+  const caps = capabilities(track)
+  const settings = track.getSettings() as MediaTrackSettings & { focusMode?: string; focusDistance?: number }
+  return [
+    track.label || 'câmera',
+    `${settings.width ?? '?'}x${settings.height ?? '?'}`,
+    `foco ${settings.focusMode ?? (caps.focusMode?.join('/') || 'não informado')}`,
+    caps.focusDistance ? `mín ${caps.focusDistance.min}m` : '',
+  ].filter(Boolean).join(' · ')
 }
 
 function frame(video: HTMLVideoElement, maxWidth: number, crop?: { x: number; y: number; w: number; h: number }) {
@@ -106,7 +146,10 @@ export function LabelCamera({
 
   const streamRef = useRef<MediaStream | null>(null)
   const lastCode = useRef('')
-  const tried = useRef(new Set<string>())
+  const probed = useRef(false)
+  const [info, setInfo] = useState('')
+  const [showInfo, setShowInfo] = useState(false)
+  const [probing, setProbing] = useState(false)
   const finished = useRef(false)
   // Callbacks do pai mudam a cada render; manter em ref evita reabrir a câmera.
   const saveRef = useRef(save)
@@ -132,7 +175,7 @@ export function LabelCamera({
       if (element.readyState >= 2 && target.current) {
         try {
           const area = targetArea(element, target.current)
-          const evidence = await readFrame(frame(element, 1280, area))
+          const evidence = await readFrame(frame(element, 1280, area), true)
           if (active && evidence?.raw_value) {
             if (evidence.raw_value !== lastCode.current) {
               lastCode.current = evidence.raw_value
@@ -160,8 +203,9 @@ export function LabelCamera({
           audio: false,
           video: {
             ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }),
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            ...VIDEO,
+            // Pedido já na abertura: alguns Androids ignoram o foco aplicado depois.
+            advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
           },
         })
         if (!active || !video.current) {
@@ -170,27 +214,34 @@ export function LabelCamera({
         }
         streamRef.current = stream
         const current = stream.getVideoTracks()[0]
-        const currentId = current.getSettings().deviceId ?? ''
-        tried.current.add(currentId)
 
         // Os rótulos só aparecem depois da permissão concedida.
-        const back = (await navigator.mediaDevices.enumerateDevices().catch(() => []))
-          .filter((item) => item.kind === 'videoinput' && !/front|frontal|user|facetime/i.test(item.label))
+        const back = backCameras(await navigator.mediaDevices.enumerateDevices().catch(() => []))
         if (!active) return
         setCameras(back)
 
-        // Na primeira abertura, troca sozinho uma lente traseira sem foco automático por outra.
-        const untried = back.find((item) => !tried.current.has(item.deviceId))
-        if (!deviceId && fixedFocus(current) && untried) {
+        // Primeira vez neste aparelho: escolhe a lente principal e lembra a escolha.
+        if (!deviceId && back.length > 1 && !probed.current) {
+          probed.current = true
           stop()
-          tried.current.add(untried.deviceId)
-          setDeviceId(untried.deviceId)
-          return
+          setError('')
+          setProbing(true)
+          const chosen = await pickBackCamera(back)
+          setProbing(false)
+          if (!active) return
+          if (chosen) {
+            localStorage.setItem(CAMERA_KEY, chosen)
+            setDeviceId(chosen)
+            return
+          }
+          // Nenhuma lente respondeu ao teste: segue com a padrão.
+          return void open()
         }
 
         video.current.srcObject = stream
         await video.current.play()
         await tune(current)
+        setInfo(describe(current))
 
         const caps = capabilities(current)
         setHasTorch(!!caps.torch)
@@ -208,8 +259,9 @@ export function LabelCamera({
         stop()
         if (!active) return
         if (deviceId) {
-          // Câmera salva não existe mais neste aparelho: volta ao padrão.
+          // Câmera salva não existe mais neste aparelho: volta ao padrão sem novo teste.
           localStorage.removeItem(CAMERA_KEY)
+          probed.current = true
           setDeviceId('')
           return
         }
@@ -269,9 +321,8 @@ export function LabelCamera({
     if (caps.focusMode?.includes('single-shot')) {
       await apply(current, { focusMode: 'single-shot', ...(caps.pointsOfInterest ? { pointsOfInterest: [point] } : {}) })
       window.setTimeout(() => void tune(current), 1500)
-    } else if (caps.focusMode?.includes('continuous')) {
-      await apply(current, { focusMode: 'manual' })
-      await tune(current)
+    } else if (caps.pointsOfInterest) {
+      await apply(current, { pointsOfInterest: [point] })
     }
   }
 
@@ -283,7 +334,7 @@ export function LabelCamera({
       const canvas = frame(video.current, 4096)
       const area = target.current ? targetArea(video.current, target.current) : undefined
       const evidence = code
-        ?? (area ? await readFrame(frame(video.current, 1800, area)) : undefined)
+        ?? (area ? await readFrame(frame(video.current, 1800, area), true) : undefined)
         ?? await readFrame(canvas)
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.94))
       if (!blob) throw new Error()
@@ -345,6 +396,7 @@ export function LabelCamera({
               <span className="corner top-right" />
               <span className="corner bottom-left" />
               <span className="corner bottom-right" />
+              <span className="aim-line" />
             </div>
             {focusAt && <span key={focusAt.key} className="vf-focus-ring" style={{ left: focusAt.x, top: focusAt.y }} />}
             <div className="vf-lens-controls">
@@ -353,13 +405,15 @@ export function LabelCamera({
                   {zoom.value.toFixed(zoom.value % 1 ? 1 : 0)}x
                 </button>
               )}
+              <button type="button" className="vf-pill-btn" onClick={() => setShowInfo(!showInfo)} aria-pressed={showInfo}
+                aria-label="Mostrar dados da câmera">?</button>
               {cameras.length > 1 && (
                 <button type="button" className="vf-pill-btn" onClick={switchCamera} aria-label="Trocar lente da câmera">
                   <Icon name="sync" /> Lente
                 </button>
               )}
             </div>
-            <p className="vf-hint">Desfocado? Afaste um pouco, use o zoom ou toque na etiqueta.</p>
+            <p className="vf-hint">{probing ? 'Escolhendo a melhor lente deste celular…' : showInfo && info ? info : 'Ponha a linha vermelha sobre o código. Desfocado? Afaste um palmo e use o zoom.'}</p>
           </div>
         )}
       </div>
@@ -399,7 +453,7 @@ export function LabelCamera({
             </button>
           </div>
         ) : scanning ? (
-          <p className="vf-scan-note">Aponte para um único código. A leitura é automática.</p>
+          <p className="vf-scan-note">Ponha a linha vermelha sobre o código desejado. A leitura é automática.</p>
         ) : (
           <div className="vf-controls-row">
             {pickFromGallery ? (

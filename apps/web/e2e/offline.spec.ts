@@ -287,6 +287,40 @@ test('lê só o código de barras pela câmera e preenche o campo', async ({ pag
   await expect(page.locator('video')).toHaveCount(0)
 })
 
+test('com dois códigos na etiqueta, lê o que está sob a linha de mira', async ({ page, context }) => {
+  await context.addInitScript(() => {
+    Object.defineProperty(window, 'BarcodeDetector', { configurable: true, value: class {
+      async detect(image: HTMLCanvasElement) {
+        const h = image.height
+        return [
+          { rawValue: 'MAC-FORA-DA-MIRA', boundingBox: new DOMRectReadOnly(0, 0, image.width, h * 0.2) },
+          { rawValue: 'SN-NA-MIRA', boundingBox: new DOMRectReadOnly(0, h * 0.4, image.width, h * 0.2) },
+        ]
+      }
+    } })
+    navigator.mediaDevices.getUserMedia = async () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 640
+      canvas.height = 480
+      const stream = canvas.captureStream(5)
+      const timer = setInterval(() => {
+        if (stream.active) canvas.getContext('2d')!.fillRect(0, 0, 640, 480)
+        else clearInterval(timer)
+      }, 150)
+      return stream
+    }
+  })
+  await context.route('**/api/v1/auth/web/**', route =>
+    route.fulfill({ json: { access_token: 'mock', expires_in: 3600, user: technician } }))
+  await page.goto('/')
+  await signIn(page)
+  await technicianNav(page, 'Coletar').click()
+  await page.locator('input[type=file]:not([capture])').setInputFiles(photo)
+  await page.getByRole('button', { name: 'Ler código de barras com a câmera' }).click()
+  await expect(page.getByLabel(/Código da etiqueta/)).toHaveValue('SN-NA-MIRA')
+  await expect(page.locator('video')).toHaveCount(0)
+})
+
 test('preserva a foto pendente depois de atualizar o Service Worker', async ({ page, context }) => {
   let revision = 1
   const types: Record<string, string> = {

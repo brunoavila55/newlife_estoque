@@ -40,7 +40,7 @@ export async function preparePhoto(file: File): Promise<Blob> {
   }
 }
 
-type DetectedCode = { rawValue: string }
+type DetectedCode = { rawValue: string; boundingBox?: DOMRectReadOnly }
 type Detector = new () => { detect(image: ImageBitmapSource): Promise<DetectedCode[]> }
 type ZxingReader = { decodeFromCanvas(canvas: HTMLCanvasElement): { getText(): string } }
 
@@ -53,15 +53,32 @@ function zxingReader(): Promise<ZxingReader> {
   return zxing
 }
 
+/** Faixa horizontal no meio do quadro, onde fica a linha de mira. */
+function middleBand(canvas: HTMLCanvasElement) {
+  const height = Math.max(1, Math.round(canvas.height * 0.4))
+  const band = document.createElement('canvas')
+  band.width = canvas.width
+  band.height = height
+  band.getContext('2d')?.drawImage(canvas, 0, (canvas.height - height) / 2, canvas.width, height, 0, 0, canvas.width, height)
+  return band
+}
+
 /**
- * Lê um código de barras do quadro. Se o leitor nativo encontrar mais de um código,
- * não escolhe nenhum: a etiqueta tem SN e MAC e o primeiro não é necessariamente o serial.
+ * Lê um código de barras do quadro. A etiqueta costuma ter SN e MAC, e o primeiro
+ * código não é necessariamente o serial, então nunca escolhemos um ao acaso:
+ * - sem `aim`, mais de um código no quadro não retorna nada;
+ * - com `aim`, vale só o código cruzado pela linha de mira no centro do quadro,
+ *   que é o que o técnico apontou.
  */
-export async function readFrame(canvas: HTMLCanvasElement): Promise<import('./db').BarcodeEvidence | undefined> {
+export async function readFrame(canvas: HTMLCanvasElement, aim = false): Promise<import('./db').BarcodeEvidence | undefined> {
   const NativeDetector = (window as Window & { BarcodeDetector?: Detector }).BarcodeDetector
   if (NativeDetector) {
     try {
-      const codes = await new NativeDetector().detect(canvas)
+      let codes = await new NativeDetector().detect(canvas)
+      if (aim && codes.length > 1) {
+        const middle = canvas.height / 2
+        codes = codes.filter((item) => item.boundingBox && item.boundingBox.top <= middle && item.boundingBox.bottom >= middle)
+      }
       if (codes.length > 1) return
       if (codes.length && validBarcode(codes[0].rawValue)) {
         return { raw_value: codes[0].rawValue, source: 'BARCODE_DETECTOR' }
@@ -69,7 +86,7 @@ export async function readFrame(canvas: HTMLCanvasElement): Promise<import('./db
     } catch { /* Alguns navegadores expõem a API sem implementar a leitura. */ }
   }
   try {
-    const raw = (await zxingReader()).decodeFromCanvas(canvas).getText()
+    const raw = (await zxingReader()).decodeFromCanvas(aim ? middleBand(canvas) : canvas).getText()
     if (validBarcode(raw)) return { raw_value: raw, source: 'ZXING' }
   } catch { /* Quadro sem leitura. */ }
 }
