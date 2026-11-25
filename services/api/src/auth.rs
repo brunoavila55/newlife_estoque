@@ -41,6 +41,7 @@ pub struct User {
     login: String,
     role: Role,
     active: bool,
+    whatsapp: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -62,6 +63,8 @@ pub struct NewUser {
     credentials: Credentials,
     name: String,
     role: Role,
+    #[serde(default)]
+    whatsapp: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -97,6 +100,29 @@ fn checked_name(value: &str) -> Result<&str, ApiError> {
         return Err(ApiError::invalid("Informe um nome de 1 a 120 caracteres."));
     }
     Ok(name)
+}
+
+/// Normaliza o WhatsApp para dígitos com código do país. Vazio significa "sem número".
+/// Números brasileiros com DDD (10 ou 11 dígitos) recebem o prefixo 55.
+fn checked_whatsapp(value: &str) -> Result<Option<String>, ApiError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let valid_chars = trimmed
+        .chars()
+        .all(|c| c.is_ascii_digit() || " +-().".contains(c));
+    let digits: String = trimmed.chars().filter(char::is_ascii_digit).collect();
+    let digits = match digits.len() {
+        10 | 11 if !trimmed.starts_with('+') => format!("55{digits}"),
+        _ => digits,
+    };
+    if !valid_chars || !(12..=15).contains(&digits.len()) || digits.starts_with('0') {
+        return Err(ApiError::invalid(
+            "Informe o WhatsApp com DDD, por exemplo (11) 98765-4321.",
+        ));
+    }
+    Ok(Some(digits))
 }
 
 async fn password_work<T: Send + 'static>(
@@ -156,12 +182,12 @@ fn bearer(headers: &HeaderMap) -> Result<Vec<u8>, ApiError> {
 }
 
 async fn locked_user(db: &mut PgConnection, user_id: Uuid) -> Result<Option<User>, ApiError> {
-    Ok(
-        sqlx::query_as("SELECT id, name, login, role, active FROM users WHERE id = $1 FOR UPDATE")
-            .bind(user_id)
-            .fetch_optional(db)
-            .await?,
+    Ok(sqlx::query_as(
+        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 FOR UPDATE",
     )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?)
 }
 
 pub async fn authorize<'a>(
@@ -200,10 +226,10 @@ async fn session_user(
     refresh: bool,
 ) -> Result<User, ApiError> {
     let sql = if refresh {
-        "SELECT u.id, name, login, role, active FROM sessions s JOIN users u ON u.id = s.user_id
+        "SELECT u.id, name, login, role, active, whatsapp FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE refresh_hash = $1 AND renew_until > now() AND active"
     } else {
-        "SELECT u.id, name, login, role, active FROM sessions s JOIN users u ON u.id = s.user_id
+        "SELECT u.id, name, login, role, active, whatsapp FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE token_hash = $1 AND expires_at > now() AND active"
     };
     sqlx::query_as(sql)
@@ -273,7 +299,7 @@ async fn login_session(state: &AppState, input: Credentials) -> Result<Session, 
         return Err(ApiError::unauthorized());
     }
     let account: Option<LoginUser> = sqlx::query_as(
-        "SELECT id, name, login, role, active, password_hash FROM users WHERE login = $1",
+        "SELECT id, name, login, role, active, whatsapp, password_hash FROM users WHERE login = $1",
     )
     .bind(login)
     .fetch_optional(&state.db)
@@ -447,7 +473,7 @@ pub async fn list_users(
         return Err(ApiError::invalid("Use um limite de 1 a 100 itens."));
     }
     let mut items: Vec<User> = sqlx::query_as(
-        "SELECT id, name, login, role, active FROM users
+        "SELECT id, name, login, role, active, whatsapp FROM users
          WHERE ($1::uuid IS NULL OR id > $1) ORDER BY id LIMIT $2",
     )
     .bind(query.after)
@@ -473,9 +499,23 @@ pub async fn create_user(
     }
     let login = checked_login(&input.credentials.login)?;
     let name = checked_name(&input.name)?;
+    let whatsapp = input
+        .whatsapp
+        .as_deref()
+        .map(checked_whatsapp)
+        .transpose()?
+        .flatten();
     let hash = hash_password(input.credentials.password).await?;
     let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
-    let user = insert_user(&mut tx, name, &login, &hash, input.role).await?;
+    let user = insert_user(
+        &mut tx,
+        name,
+        &login,
+        &hash,
+        input.role,
+        whatsapp.as_deref(),
+    )
+    .await?;
     audit(
         &mut tx,
         actor,
@@ -499,7 +539,7 @@ pub async fn disable_user(
     let id = parse_id(&id)?;
     // Exclude administrators before locking the target to preserve lock order.
     let user: User = sqlx::query_as(
-        "SELECT id, name, login, role, active FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
+        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
     ).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
     if user.active {
         sqlx::query("UPDATE users SET active = false WHERE id = $1")
@@ -564,6 +604,8 @@ pub async fn reset_password(
 pub struct UserChanges {
     name: Option<String>,
     role: Option<Role>,
+    /// Texto vazio remove o número; ausente mantém o atual.
+    whatsapp: Option<String>,
 }
 
 /// Bloqueia a troca de perfil enquanto a conta ainda responde por custódia,
@@ -612,13 +654,19 @@ pub async fn update_user(
         return Err(ApiError::invalid("Selecione técnico ou estoquista."));
     }
     let name = input.name.as_deref().map(checked_name).transpose()?;
+    let whatsapp = input
+        .whatsapp
+        .as_deref()
+        .map(checked_whatsapp)
+        .transpose()?;
     // Exclude administrators before locking the target to preserve lock order.
     let before: User = sqlx::query_as(
-        "SELECT id, name, login, role, active FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
+        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
     ).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
     let name = name.unwrap_or(&before.name).to_owned();
     let role = input.role.unwrap_or(before.role);
-    if name == before.name && role == before.role {
+    let whatsapp = whatsapp.unwrap_or_else(|| before.whatsapp.clone());
+    if name == before.name && role == before.role && whatsapp == before.whatsapp {
         tx.commit().await?;
         return Ok(Json(before));
     }
@@ -632,11 +680,12 @@ pub async fn update_user(
         ));
     }
     let after: User = sqlx::query_as(
-        "UPDATE users SET name = $1, role = $2 WHERE id = $3 RETURNING id, name, login, role, active",
+        "UPDATE users SET name = $1, role = $2, whatsapp = $4 WHERE id = $3 RETURNING id, name, login, role, active, whatsapp",
     )
     .bind(&name)
     .bind(role)
     .bind(id)
+    .bind(&whatsapp)
     .fetch_one(&mut *tx)
     .await?;
     if role != before.role {
@@ -649,8 +698,8 @@ pub async fn update_user(
         "USER_UPDATED",
         "user",
         id,
-        Some(json!({"name": before.name, "role": before.role})),
-        json!({"name": after.name, "role": after.role, "sessions_revoked": role != before.role}),
+        Some(json!({"name": before.name, "role": before.role, "whatsapp": before.whatsapp})),
+        json!({"name": after.name, "role": after.role, "whatsapp": after.whatsapp, "sessions_revoked": role != before.role}),
     )
     .await?;
     tx.commit().await?;
@@ -665,7 +714,7 @@ pub async fn enable_user(
     let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
     let id = parse_id(&id)?;
     let user: User = sqlx::query_as(
-        "SELECT id, name, login, role, active FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
+        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
     ).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
     if !user.active {
         sqlx::query("UPDATE users SET active = true WHERE id = $1")
@@ -701,16 +750,18 @@ async fn insert_user(
     login: &str,
     hash: &str,
     role: Role,
+    whatsapp: Option<&str>,
 ) -> Result<User, ApiError> {
     sqlx::query_as(
-        "INSERT INTO users (id, name, login, password_hash, role) VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (login) DO NOTHING RETURNING id, name, login, role, active",
+        "INSERT INTO users (id, name, login, password_hash, role, whatsapp) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (login) DO NOTHING RETURNING id, name, login, role, active, whatsapp",
     )
     .bind(Uuid::new_v4())
     .bind(name)
     .bind(login)
     .bind(hash)
     .bind(role)
+    .bind(whatsapp)
     .fetch_optional(db)
     .await?
     .ok_or(ApiError(
@@ -772,6 +823,7 @@ pub async fn bootstrap(db: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
         &checked_login(&login)?,
         &hash,
         Role::Administrator,
+        None,
     )
     .await?;
     audit(

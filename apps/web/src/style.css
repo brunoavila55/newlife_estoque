@@ -457,6 +457,13 @@ progress::-moz-progress-bar { background: var(--success-600); border-radius: var
 
 /* ---------- Voucher ---------- */
 .voucher { display: grid; gap: 1rem; }
+.whatsapp-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 2.375rem; padding: .45rem .95rem;
+  border-radius: var(--radius); background: #128c4a; color: #fff; font-size: .875rem; font-weight: 600;
+  text-decoration: none; white-space: nowrap; box-shadow: var(--shadow-xs);
+}
+.whatsapp-btn:hover { background: #0e7a40; }
+.whatsapp-btn:focus-visible { outline: none; box-shadow: var(--focus); }
 .voucher-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-bottom: 1rem; border-bottom: 2px solid var(--gray-900); }
 .voucher-head img { width: 6rem; }
 .voucher-head h1 { font-size: 1.25rem; }
@@ -469,8 +476,6 @@ progress::-moz-progress-bar { background: var(--success-600); border-radius: var
 .voucher-table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
 .voucher-table th { text-align: left; font-size: .7rem; letter-spacing: .04em; text-transform: uppercase; color: var(--text-tertiary); }
 .voucher-table th, .voucher-table td { padding: .45rem .5rem; border-bottom: 1px solid var(--border); }
-.voucher-signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; margin: 3.5rem 0 1rem; }
-.voucher-signatures span { padding-top: .45rem; border-top: 1px solid var(--gray-900); font-size: .8125rem; }
 
 /* ---------- OCR review ---------- */
 .review-filters { align-items: center; }

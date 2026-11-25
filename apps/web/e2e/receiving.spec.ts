@@ -19,7 +19,7 @@ test('confere um lote com o leitor: bipe, Enter confirma, inclusão, identifica�
   const batch = { id: 'b7', number: 7, technician_id: technician.id, technician_name: technician.name, status: 'SUBMITTED',
     notes: 'Pilha da manhã', receipt_session_id: null as string | null, clerk_name: null as string | null,
     created_at: date, finished_at: null, total: 2, unidentified: 1, received: 0 }
-  const session = { id: sessionId, technician_id: technician.id, technician_name: technician.name, warehouse_id: 'w',
+  const session = { id: sessionId, technician_id: technician.id, technician_name: technician.name, technician_whatsapp: '5511987654321', warehouse_id: 'w',
     warehouse_name: 'Depósito piloto', opened_at: date, closed_at: null as string | null, closing_reason: null as string | null,
     batch_id: batch.id, batch_number: 7, batch_notes: batch.notes }
   type Item = { equipment_id: string; matched_scan_id: string | null; confirmed_at: string | null; identifiers: { kind: string; raw_value: string }[]; inspection: unknown }
@@ -155,10 +155,17 @@ test('confere um lote com o leitor: bipe, Enter confirma, inclusão, identifica�
   await page.getByLabel('Justificativa (obrigatória)').fill('Código avulso separado para revisão.')
   await close.click()
   await expect(page.getByText('Comprovante de devolução', { exact: true })).toBeVisible()
-  await page.emulateMedia({ media: 'print' })
   const voucher = page.locator('.receipt-print')
   await expect(voucher.getByText('SN 0001-O')).toBeVisible()
   await expect(voucher.getByText('Código avulso separado para revisão.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Imprimir' })).toHaveCount(0)
+  const whatsapp = new URL(await page.getByRole('link', { name: 'Enviar pelo WhatsApp' }).getAttribute('href') ?? '')
+  expect(whatsapp.origin + whatsapp.pathname).toBe('https://web.whatsapp.com/send')
+  expect(whatsapp.searchParams.get('phone')).toBe('5511987654321')
+  const message = whatsapp.searchParams.get('text') ?? ''
+  expect(message).toContain('*Comprovante de devolução — New Life*')
+  expect(message).toContain('SN 0001-O')
+  expect(message).toContain('Justificativa: Código avulso separado para revisão.')
   expect(confirmations).toHaveLength(2)
 })
 

@@ -4,7 +4,14 @@ import type { User } from './db'
 import { InventoryPanel } from './inventory'
 import { ReviewDesk } from './review'
 
-type ManagedUser = User & { active: boolean }
+type ManagedUser = User & { active: boolean; whatsapp: string | null }
+
+/** Exibe 5511987654321 como +55 (11) 98765-4321. */
+export function formatWhatsapp(digits: string | null | undefined) {
+  if (!digits) return ''
+  const br = /^55(\d{2})(\d{4,5})(\d{4})$/.exec(digits)
+  return br ? `+55 (${br[1]}) ${br[2]}-${br[3]}` : '+' + digits
+}
 type UserPage = { items: ManagedUser[]; next_cursor: string | null }
 
 const roleLabels: Record<string, string> = {
@@ -80,19 +87,20 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
       {loading && !page && <p role="status" className="muted">Consultando usuários…</p>}
       <div className="card table-card">
         <table className="data-table">
-          <thead><tr><th>Nome</th><th>Login</th><th>Perfil</th><th>Situação</th><th /></tr></thead>
+          <thead><tr><th>Nome</th><th>Login</th><th>Perfil</th><th>WhatsApp</th><th>Situação</th><th /></tr></thead>
           <tbody>
             {page?.items.map((user) => <tr key={user.id} className={user.active ? '' : 'inactive'}>
               <td><strong>{user.name}</strong></td>
               <td className="mono">{user.login}</td>
               <td>{roleLabels[user.role ?? 'technician']}</td>
+              <td className="mono">{formatWhatsapp(user.whatsapp) || '—'}</td>
               <td><span className={'badge ' + (user.active ? 'badge-success' : 'badge-muted')}>{user.active ? 'Ativo' : 'Desativado'}</span></td>
               <td className="num"><div className="row-actions">
                 {user.role === 'technician' && <button className="small-btn" onClick={() => setSelected(user)}>Abrir técnico</button>}
                 {user.role !== 'administrator' && <button className="small-btn" onClick={() => setManaging(user)}>Gerenciar</button>}
               </div></td>
             </tr>)}
-            {page?.items.length === 0 && <tr><td colSpan={5} className="empty-cell">Nenhum usuário cadastrado.</td></tr>}
+            {page?.items.length === 0 && <tr><td colSpan={6} className="empty-cell">Nenhum usuário cadastrado.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -144,6 +152,7 @@ function UserRegistration({ owner, denied }: { owner: string; denied: () => void
         body: JSON.stringify({
           name: fields.get('name'), login: fields.get('login'),
           role: fields.get('role'), password: fields.get('password'),
+          whatsapp: fields.get('whatsapp'),
         }),
       })
       form.reset()
@@ -166,6 +175,8 @@ function UserRegistration({ owner, denied }: { owner: string; denied: () => void
           <label>Login<input name="login" required minLength={3} maxLength={64} pattern={String.raw`[A-Za-z0-9_.\x2d]{3,64}`} autoCapitalize="none" autoComplete="off" aria-describedby="login-format" /></label>
           <small id="login-format">Use letras sem acento, números, ponto, hífen ou sublinhado.</small>
           <label>Perfil<select name="role"><option value="technician">Técnico</option><option value="warehouse_clerk">Estoquista</option></select></label>
+          <label>WhatsApp<input name="whatsapp" type="tel" inputMode="tel" autoComplete="off" maxLength={24} placeholder="(11) 98765-4321" aria-describedby="whatsapp-format" /></label>
+          <small id="whatsapp-format">Com DDD. O comprovante de devolução é enviado para este número, sem papel.</small>
           <label>Senha inicial<input name="password" type="password" required minLength={6} autoComplete="new-password" aria-describedby="password-format" /></label>
           <small id="password-format">Use pelo menos 6 caracteres.</small>
           <button className="primary" type="submit">{saving ? 'Criando usuário…' : 'Criar usuário'}</button>
@@ -193,6 +204,7 @@ function UserManager({ owner, user, fail, close, changed }: {
   const [notice, setNotice] = useState('')
   const [name, setName] = useState(user.name)
   const [role, setRole] = useState(user.role ?? 'technician')
+  const [whatsapp, setWhatsapp] = useState(formatWhatsapp(user.whatsapp))
   const [password, setPassword] = useState('')
   const [revealed, setRevealed] = useState(false)
   const [confirmDisable, setConfirmDisable] = useState(false)
@@ -214,15 +226,17 @@ function UserManager({ owner, user, fail, close, changed }: {
   const path = '/admin/users/' + user.id
   const json = { 'Content-Type': 'application/json' }
   const roleChanged = role !== user.role
+  const whatsappChanged = whatsapp.trim() !== formatWhatsapp(user.whatsapp)
 
   function save(event: FormEvent) {
     event.preventDefault()
     void run(async () => {
       const updated = await administrator<ManagedUser>(owner, path, {
         method: 'PATCH', headers: json,
-        body: JSON.stringify({ name, ...(roleChanged ? { role } : {}) }),
+        body: JSON.stringify({ name, ...(roleChanged ? { role } : {}), ...(whatsappChanged ? { whatsapp } : {}) }),
       })
       changed(updated)
+      setWhatsapp(formatWhatsapp(updated.whatsapp))
       return roleChanged
         ? 'Dados salvos. O perfil agora é ' + roleLabels[updated.role ?? 'technician'] + ' e as sessões abertas foram encerradas.'
         : 'Dados salvos.'
@@ -270,8 +284,11 @@ function UserManager({ owner, user, fail, close, changed }: {
             <option value="technician">Técnico</option>
             <option value="warehouse_clerk">Estoquista</option>
           </select></label>
+          <label>WhatsApp<input type="tel" inputMode="tel" autoComplete="off" maxLength={24} value={whatsapp}
+            onChange={(event) => setWhatsapp(event.target.value)} placeholder="(11) 98765-4321" aria-describedby="manage-whatsapp" /></label>
+          <small id="manage-whatsapp">Com DDD. Recebe o comprovante de devolução. Deixe vazio para remover.</small>
           {roleChanged && <small>Trocar o perfil encerra as sessões da pessoa. Técnicos com equipamentos em posse, capturas sem identificação, lotes ou sessões de recebimento em aberto não podem mudar de perfil até a pendência ser resolvida.</small>}
-          <button className="primary" type="submit" disabled={name.trim() === user.name && !roleChanged}>{busy ? 'Salvando…' : 'Salvar alterações'}</button>
+          <button className="primary" type="submit" disabled={name.trim() === user.name && !roleChanged && !whatsappChanged}>{busy ? 'Salvando…' : 'Salvar alterações'}</button>
         </fieldset>
       </form>
 

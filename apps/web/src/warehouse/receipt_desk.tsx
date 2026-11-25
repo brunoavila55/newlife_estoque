@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ApiError, warehouse } from '../api'
+import { formatWhatsapp } from '../users'
 import { playSound } from '../audio'
 import {
   batchName, dateTime, jsonPost, kindLabel, type Identifier, type Suggestion,
 } from '../delivery'
 
 type Session = {
-  id: string; technician_id: string; technician_name: string; warehouse_name: string
+  id: string; technician_id: string; technician_name: string; technician_whatsapp: string | null; warehouse_name: string
   opened_at: string; closed_at: string | null; closing_reason: string | null
   batch_id: string | null; batch_number: number | null; batch_notes: string | null
 }
@@ -434,14 +435,70 @@ export function ReceiptDesk({ owner, clerkName, id, denied, back }: {
   </div>
 }
 
+function inspectionText(inspection: Inspection | null) {
+  if (!inspection) return ''
+  return ' — fonte ' + supplies[inspection.power_supply].toLowerCase()
+    + ', cabos ' + (inspection.cables_present ? 'sim' : 'não')
+    + ', ' + conditions[inspection.condition].toLowerCase()
+}
+
+/** Comprovante em texto simples (formatação do WhatsApp), para enviar sem papel. */
+function voucherText(detail: Detail, clerkName: string, title: string) {
+  const { session, totals } = detail
+  const received = detail.items.filter((item) => item.confirmed_at)
+  const missing = detail.items.filter((item) => !item.confirmed_at)
+  const lines = [
+    '*Comprovante de devolução — New Life*',
+    title,
+    '',
+    'Técnico: ' + session.technician_name,
+    'Recebido por: ' + clerkName + ' · ' + session.warehouse_name,
+    'Início: ' + dateTime.format(new Date(session.opened_at)),
+    'Encerramento: ' + (session.closed_at ? dateTime.format(new Date(session.closed_at)) : '—'),
+    '',
+    `*Recebidos (${totals.confirmed})*`,
+    ...received.map((item, index) => `${index + 1}. ${ids(item.identifiers)}${inspectionText(item.inspection)}`),
+  ]
+  if (received.length === 0) lines.push('Nenhum equipamento recebido.')
+  const pending = missing.length + detail.unidentified.length
+  if (pending > 0) {
+    lines.push('', `*Continuam com o técnico (${pending})*`,
+      ...missing.map((item) => '• ' + ids(item.identifiers)),
+      ...detail.unidentified.map((entry) => '• Foto sem identificação de ' + dateTime.format(new Date(entry.captured_at))
+        + (entry.typed_code ? ' · código informado ' + entry.typed_code : '')))
+  }
+  if (session.closing_reason) lines.push('', 'Justificativa: ' + session.closing_reason)
+  lines.push('', 'Sessão ' + session.id)
+  return lines.join('\n')
+}
+
 function Voucher({ detail, clerkName, title }: { detail: Detail; clerkName: string; title: string }) {
   const { session, totals } = detail
   const received = detail.items.filter((item) => item.confirmed_at)
   const missing = detail.items.filter((item) => !item.confirmed_at)
+  const [copied, setCopied] = useState(false)
+  const text = voucherText(detail, clerkName, title)
+  const phone = session.technician_whatsapp
+  const link = phone && 'https://web.whatsapp.com/send?phone=' + phone + '&text=' + encodeURIComponent(text)
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+    } catch {
+      setCopied(false)
+    }
+  }
+
   return <section className="card voucher">
-    <div className="section-head no-print">
-      <p className="muted">Entregue uma via ao técnico.</p>
-      <button type="button" className="primary" onClick={() => window.print()}>Imprimir</button>
+    <div className="section-head">
+      {phone
+        ? <p className="muted">Envie o comprovante para o WhatsApp de {session.technician_name} ({formatWhatsapp(phone)}).</p>
+        : <p className="muted">{session.technician_name} não tem WhatsApp cadastrado. Peça ao administrador para cadastrar o número em Usuários ou copie o texto.</p>}
+      <div className="actions">
+        {link && <a className="whatsapp-btn" href={link} target="_blank" rel="noopener noreferrer">Enviar pelo WhatsApp</a>}
+        <button type="button" className={link ? 'small-btn' : 'primary'} onClick={() => void copy()}>{copied ? 'Texto copiado' : 'Copiar texto'}</button>
+      </div>
     </div>
     <div className="receipt-print">
       <header className="voucher-head">
@@ -470,10 +527,6 @@ function Voucher({ detail, clerkName, title }: { detail: Detail; clerkName: stri
           {detail.unidentified.map((entry) => <li key={entry.capture_id}>Foto sem identificação de {dateTime.format(new Date(entry.captured_at))}{entry.typed_code ? ' · código informado ' + entry.typed_code : ''}</li>)}</ul>
       </>}
       {session.closing_reason && <p><strong>Justificativa:</strong> {session.closing_reason}</p>}
-      <div className="voucher-signatures">
-        <span>Técnico: {session.technician_name}</span>
-        <span>Estoque: {clerkName}</span>
-      </div>
       <p className="muted small-text">Sessão {session.id}</p>
     </div>
   </section>

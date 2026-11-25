@@ -346,6 +346,9 @@ paths:
                   description: Após remover espaços externos e converter as letras ASCII para minúsculas, deve corresponder a ^[a-z0-9_.-]{3,64}$.
                 password: { $ref: '#/components/schemas/NewPassword' }
                 role: { enum: [technician, warehouse_clerk] }
+                whatsapp:
+                  type: string
+                  description: Opcional, com DDD. Aceita espaços, parênteses, hífen e +; números brasileiros de 10 ou 11 dígitos recebem o prefixo 55. Guardado só com dígitos.
       responses:
         '201':
           description: Conta criada
@@ -359,7 +362,7 @@ paths:
       - $ref: '#/components/parameters/Id'
     patch:
       operationId: updateUser
-      summary: Alterar nome ou perfil de técnico ou estoquista
+      summary: Alterar nome, perfil ou WhatsApp de técnico ou estoquista
       description: >-
         Requer papel de administrador. Administradores não podem ser alterados por esta rota.
         A troca de perfil revoga as sessões da conta e é recusada com 409 ROLE_CHANGE_BLOCKED
@@ -376,6 +379,9 @@ paths:
               properties:
                 name: { type: string, minLength: 1, maxLength: 120 }
                 role: { enum: [technician, warehouse_clerk] }
+                whatsapp:
+                  type: string
+                  description: Opcional, com DDD. Aceita espaços, parênteses, hífen e +; números brasileiros de 10 ou 11 dígitos recebem o prefixo 55. Guardado só com dígitos. Texto vazio remove o número.
       responses:
         '200':
           description: Conta após a alteração
@@ -1400,7 +1406,7 @@ components:
             batch_status: { type: [string, 'null'] }
     ReceiptSession:
       type: object
-      required: [id, technician_id, technician_name, warehouse_id, warehouse_name, opened_at, closed_at, closing_reason, batch_id, batch_number, batch_notes]
+      required: [id, technician_id, technician_name, technician_whatsapp, warehouse_id, warehouse_name, opened_at, closed_at, closing_reason, batch_id, batch_number, batch_notes]
       properties:
         batch_id: { type: [string, 'null'], format: uuid }
         batch_number: { type: [integer, 'null'] }
@@ -1408,6 +1414,7 @@ components:
         id: { type: string, format: uuid }
         technician_id: { type: string, format: uuid }
         technician_name: { type: string }
+        technician_whatsapp: { type: [string, 'null'], description: WhatsApp do técnico para envio do comprovante em texto }
         warehouse_id: { type: string, format: uuid }
         warehouse_name: { type: string }
         opened_at: { type: string, format: date-time }
@@ -1540,6 +1547,10 @@ components:
         login: { type: string }
         active: { type: boolean }
         role: { enum: [technician, warehouse_clerk, administrator] }
+        whatsapp:
+          type: [string, 'null']
+          pattern: '^[1-9][0-9]{11,14}$'
+          description: Dígitos com código do país, usado para enviar o comprovante de devolução.
     SubmittedIdentifier:
       type: object
       required: [kind, raw_value]

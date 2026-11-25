@@ -2139,6 +2139,62 @@ async fn admin_edits_profile_role_and_reactivates_accounts(db: PgPool) {
         StatusCode::BAD_REQUEST
     );
 
+    // WhatsApp: normalized to digits with country code, rejected when malformed, cleared with "".
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/api/v1/admin/users",
+        Some(access(&admin)),
+        json!({"login": "zap", "name": "Zap", "password": PASSWORD, "role": "technician",
+            "whatsapp": "(11) 98765-4321"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["whatsapp"], "5511987654321");
+    let zap: Uuid = serde_json::from_value(created["id"].clone()).unwrap();
+    for bad in ["123", "11 9876-ABCD", "0011987654321"] {
+        assert_eq!(
+            call(
+                &app,
+                "PATCH",
+                &user(zap),
+                Some(access(&admin)),
+                json!({"whatsapp": bad})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+    let (status, changed) = call(
+        &app,
+        "PATCH",
+        &user(zap),
+        Some(access(&admin)),
+        json!({"whatsapp": "+351 912 345 678"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["whatsapp"], "351912345678");
+    let (_, cleared) = call(
+        &app,
+        "PATCH",
+        &user(zap),
+        Some(access(&admin)),
+        json!({"whatsapp": ""}),
+    )
+    .await;
+    assert!(cleared["whatsapp"].is_null(), "{cleared}");
+    let changes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'USER_UPDATED' AND entity_id = $1",
+    )
+    .bind(zap)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(changes, 2);
+
     // Name-only edits keep the person's sessions.
     let (status, renamed) = call(
         &app,

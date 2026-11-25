@@ -30,6 +30,7 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
       }
       expect(request.postDataJSON()).toEqual({
         name: technician.name, login: technician.login, role: 'technician', password: 'senha-inicial-local',
+        whatsapp: '(11) 98765-4321',
       })
       created = true
       return route.fulfill({ status: 201, json: technician })
@@ -70,6 +71,7 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
   await page.getByLabel('Nome', { exact: true }).fill(technician.name)
   await page.getByLabel('Login', { exact: true }).fill(technician.login)
   await page.getByLabel('Senha inicial').fill('senha-inicial-local')
+  await page.getByLabel('WhatsApp').fill('(11) 98765-4321')
   await page.getByRole('button', { name: 'Criar usuário', exact: true }).click()
   await expect(page.getByText('Conta criada para Técnica de campo (tecnica-01).')).toBeVisible()
   await expect(page.getByLabel('Senha inicial')).toHaveValue('')

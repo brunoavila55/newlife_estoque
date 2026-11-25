@@ -35,6 +35,7 @@ struct Session {
     id: Uuid,
     technician_id: Uuid,
     technician_name: String,
+    technician_whatsapp: Option<String>,
     warehouse_id: Uuid,
     warehouse_name: String,
     opened_at: DateTime<Utc>,
@@ -45,7 +46,8 @@ struct Session {
     batch_notes: Option<String>,
 }
 
-const SESSION_FIELDS: &str = "s.id, s.technician_id, u.name AS technician_name, s.warehouse_id,
+const SESSION_FIELDS: &str = "s.id, s.technician_id, u.name AS technician_name,
+    u.whatsapp AS technician_whatsapp, s.warehouse_id,
     w.name AS warehouse_name, s.opened_at, s.closed_at, s.closing_reason,
     b.id AS batch_id, b.number AS batch_number, b.notes AS batch_notes";
 const SESSION_FROM: &str = "receipt_sessions s JOIN users u ON s.technician_id = u.id

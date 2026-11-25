@@ -18,7 +18,7 @@ O sistema substitui o bloco de notas usado pelos técnicos. O técnico fotografa
 | **Lotes para conferir** | Fila de lotes enviados. Abre a mesa de conferência. |
 | **Mesa de conferência** | Bipe e **Enter** por equipamento. Mostra as listas de faltantes, recebidos e ocorrências, além da conferência de fonte, cabos e estado. Inclui itens fora do lote e identifica fotos pelo bipe. Gera o comprovante. |
 | **Estoque por técnico** | Saldo de cada técnico, com fotos sem identificação, lotes abertos e alerta de retenção acima de 7 dias. |
-| **Comprovantes** | Conferências anteriores e impressão do comprovante. |
+| **Comprovantes** | Conferências anteriores e envio do comprovante em texto pelo WhatsApp do técnico, sem papel. |
 | **Rastrear equipamento** | Histórico de custódia por serial ou MAC. |
 | **Revisão de fotos** e **Usuários e permissões** | Exclusivos do administrador. |
 

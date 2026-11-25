@@ -48,7 +48,7 @@ O lote nunca transfere custódia sozinho. Cada equipamento só sai do técnico q
 
 - **Lotes para conferir:** fila de lotes enviados pelos técnicos, com busca por número ou nome.
 - **Estoque por técnico:** quantos equipamentos cada técnico tem, quantas fotos ainda não foram identificadas, lotes abertos e há quantos dias está o item mais antigo. Mais de 7 dias aparece em vermelho.
-- **Comprovantes:** conferências abertas pelo estoquista, com o comprovante para impressão.
+- **Comprovantes:** conferências abertas pelo estoquista, com o comprovante enviado em texto pelo WhatsApp Web para o número cadastrado do técnico (sem impressão).
 - **Rastrear equipamento:** histórico de custódia por serial ou MAC.
 
 ## Captura offline
