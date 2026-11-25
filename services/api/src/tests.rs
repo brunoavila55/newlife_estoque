@@ -1602,3 +1602,463 @@ async fn operational_routes_are_scoped_and_report_recoverable_failures(db: PgPoo
         StatusCode::OK
     );
 }
+
+async fn pending_capture(db: &PgPool, technician_id: Uuid, typed_code: &str) -> Uuid {
+    let id = capture(db, technician_id, "labels").await;
+    sqlx::query("UPDATE captures SET status = 'NEEDS_REVIEW', barcode_evidence = $1 WHERE id = $2")
+        .bind(json!({"raw_value": typed_code, "source": "MANUAL"}))
+        .bind(id)
+        .execute(db)
+        .await
+        .unwrap();
+    id
+}
+
+async fn capture_of(db: &PgPool, equipment: Uuid) -> Uuid {
+    sqlx::query_scalar("SELECT id FROM captures WHERE equipment_id = $1")
+        .bind(equipment)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+const GOOD: &str = r#"{"power_supply":"ORIGINAL","cables_present":true,"condition":"GOOD"}"#;
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn delivery_batches_scope_receipt_and_identify_at_counter(db: PgPool) {
+    let (app, _permit) = fixture(&db).await;
+    let admin = login(&app, "admin").await;
+    let owner = create_technician(&app, &admin, "batch-tech").await;
+    let other = create_technician(&app, &admin, "batch-other").await;
+    create_account(&app, &admin, "batch-clerk", "warehouse_clerk").await;
+    create_account(&app, &admin, "batch-clerk-two", "warehouse_clerk").await;
+    let tech = login(&app, "batch-tech").await;
+    let intruder = login(&app, "batch-other").await;
+    let clerk = login(&app, "batch-clerk").await;
+    let clerk_two = login(&app, "batch-clerk-two").await;
+    let inspection: Value = serde_json::from_str(GOOD).unwrap();
+
+    let first = identify_fixture(
+        &db,
+        &app,
+        &admin,
+        owner,
+        json!([{"kind":"SERIAL","raw_value":"LOTE-0001"}]),
+    )
+    .await;
+    let left_behind = identify_fixture(
+        &db,
+        &app,
+        &admin,
+        owner,
+        json!([{"kind":"SERIAL","raw_value":"LOTE-0002"}]),
+    )
+    .await;
+    let forgotten = identify_fixture(
+        &db,
+        &app,
+        &admin,
+        owner,
+        json!([{"kind":"MAC","raw_value":"AA:BB:CC:00:00:03"}]),
+    )
+    .await;
+    let foreign = identify_fixture(
+        &db,
+        &app,
+        &admin,
+        other,
+        json!([{"kind":"SERIAL","raw_value":"ALHEIO-01"}]),
+    )
+    .await;
+    let unread = pending_capture(&db, owner, "sn-novo-77").await;
+    let (first_capture, behind_capture) = (
+        capture_of(&db, first).await,
+        capture_of(&db, left_behind).await,
+    );
+
+    // O técnico vê equipamentos identificados e coletas sem identificação.
+    let (status, custody) = call(
+        &app,
+        "GET",
+        "/api/v1/me/custody",
+        Some(access(&tech)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{custody}");
+    assert_eq!(custody["items"].as_array().unwrap().len(), 4, "{custody}");
+
+    let batch_id = Uuid::new_v4();
+    let body = json!({"client_batch_id": batch_id, "capture_ids": [first_capture, behind_capture, unread], "notes": "Pilha da manhã"});
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/api/v1/me/batches",
+        Some(access(&tech)),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["batch"]["status"], "SUBMITTED");
+    assert_eq!(created["batch"]["total"], 3);
+    assert_eq!(created["batch"]["unidentified"], 1);
+    // Repetir a mesma requisição devolve o mesmo lote.
+    let (status, again) = call(
+        &app,
+        "POST",
+        "/api/v1/me/batches",
+        Some(access(&tech)),
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["batch"]["number"], created["batch"]["number"]);
+    let (status, reused) = call(
+        &app,
+        "POST",
+        "/api/v1/me/batches",
+        Some(access(&tech)),
+        json!({"client_batch_id": batch_id, "capture_ids": [first_capture]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{reused}");
+    let (status, twice) = call(
+        &app,
+        "POST",
+        "/api/v1/me/batches",
+        Some(access(&tech)),
+        json!({"client_batch_id": Uuid::new_v4(), "capture_ids": [first_capture]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{twice}");
+    assert_eq!(twice["code"], "ITEM_IN_ANOTHER_BATCH");
+    let foreign_capture = capture_of(&db, foreign).await;
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/v1/me/batches",
+        Some(access(&tech)),
+        json!({"client_batch_id": Uuid::new_v4(), "capture_ids": [foreign_capture]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let batch_path = format!("/api/v1/me/batches/{batch_id}");
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &batch_path,
+            Some(access(&intruder)),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            "/api/v1/warehouse/batches",
+            Some(access(&tech)),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    // O lote em si não transfere custódia.
+    let holder: Option<Uuid> =
+        sqlx::query_scalar("SELECT technician_id FROM equipment WHERE id = $1")
+            .bind(first)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(holder, Some(owner));
+
+    let (status, summary) = call(
+        &app,
+        "GET",
+        "/api/v1/warehouse/technicians-summary?search=batch-tech",
+        Some(access(&clerk)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{summary}");
+    assert_eq!(summary["items"][0]["in_custody"], 3, "{summary}");
+    assert_eq!(summary["items"][0]["unidentified"], 1);
+    assert_eq!(summary["items"][0]["open_batches"], 1);
+    let (status, queue) = call(
+        &app,
+        "GET",
+        "/api/v1/warehouse/batches?status=open",
+        Some(access(&clerk)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{queue}");
+    assert_eq!(queue["items"].as_array().unwrap().len(), 1);
+
+    // Dois estoquistas abrindo o mesmo lote ao mesmo tempo: apenas um conduz a conferência.
+    let receive = format!("/api/v1/warehouse/batches/{batch_id}/receive");
+    let (left, right) = tokio::join!(
+        call(
+            &app,
+            "POST",
+            &receive,
+            Some(access(&clerk)),
+            json!({"client_session_id": Uuid::new_v4()})
+        ),
+        call(
+            &app,
+            "POST",
+            &receive,
+            Some(access(&clerk_two)),
+            json!({"client_session_id": Uuid::new_v4()})
+        ),
+    );
+    let (winner, opened) = match (left.0, right.0) {
+        (StatusCode::OK, StatusCode::CONFLICT) => (&clerk, left.1),
+        (StatusCode::CONFLICT, StatusCode::OK) => (&clerk_two, right.1),
+        other => panic!("resultado inesperado: {other:?} {} {}", left.1, right.1),
+    };
+    let session_id = opened["receipt_session_id"].as_str().unwrap().to_owned();
+    let (status, resumed) = call(
+        &app,
+        "POST",
+        &receive,
+        Some(access(winner)),
+        json!({"client_session_id": Uuid::new_v4()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resumed}");
+    assert_eq!(resumed["receipt_session_id"], session_id.as_str());
+    let (status, cancel) = call(
+        &app,
+        "POST",
+        &format!("{batch_path}/cancel"),
+        Some(access(&tech)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{cancel}");
+
+    let path = format!("/api/v1/receipt-sessions/{session_id}");
+    let (status, detail) = call(&app, "GET", &path, Some(access(winner)), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["totals"]["expected"], 2, "{detail}");
+    assert_eq!(detail["totals"]["unidentified"], 1);
+    assert_eq!(
+        detail["session"]["batch_number"],
+        created["batch"]["number"]
+    );
+
+    // Item identificado do lote.
+    let scan = examine(
+        &app,
+        &path,
+        winner,
+        json!({"client_scan_id": Uuid::new_v4(), "value": "lote-0001"}),
+        "MATCHED",
+    )
+    .await;
+    let (status, confirmed) = call(
+        &app,
+        "POST",
+        &format!("{path}/confirm"),
+        Some(access(winner)),
+        json!({"equipment_id": first, "scan_id": scan["id"], "inspection": inspection}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{confirmed}");
+
+    // Equipamento de outro técnico e item esquecido fora do lote.
+    examine(
+        &app,
+        &path,
+        winner,
+        json!({"client_scan_id": Uuid::new_v4(), "value": "ALHEIO-01"}),
+        "OTHER_TECHNICIAN",
+    )
+    .await;
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("{path}/include"),
+        Some(access(winner)),
+        json!({"value": "ALHEIO-01"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    examine(
+        &app,
+        &path,
+        winner,
+        json!({"client_scan_id": Uuid::new_v4(), "value": "aabbcc000003"}),
+        "NOT_IN_SESSION",
+    )
+    .await;
+    let (status, included) = call(
+        &app,
+        "POST",
+        &format!("{path}/include"),
+        Some(access(winner)),
+        json!({"value": "aabbcc000003"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{included}");
+    let scan = examine(
+        &app,
+        &path,
+        winner,
+        json!({"client_scan_id": Uuid::new_v4(), "value": "aabbcc000003"}),
+        "MATCHED",
+    )
+    .await;
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("{path}/confirm"),
+        Some(access(winner)),
+        json!({"equipment_id": forgotten, "scan_id": scan["id"], "inspection": inspection}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Coleta sem identificação: o bipe aponta a foto e o estoquista confirma.
+    let unknown = examine(
+        &app,
+        &path,
+        winner,
+        json!({"client_scan_id": Uuid::new_v4(), "value": "SN-NOVO-77"}),
+        "UNKNOWN",
+    )
+    .await;
+    assert_eq!(unknown["capture_candidates"], json!([unread]), "{unknown}");
+    let (status, photo) = call(
+        &app,
+        "GET",
+        &format!("{path}/captures/{unread}/image-url"),
+        Some(access(winner)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{photo}");
+    let (status, _) = call(
+        &app,
+        "GET",
+        &format!("{path}/captures/{foreign_capture}/image-url"),
+        Some(access(winner)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let identify = json!({"scan_id": unknown["id"], "capture_id": unread, "inspection": inspection,
+        "identifiers": [{"kind":"SERIAL","raw_value":"OUTRO-CODIGO"}]});
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("{path}/identify"),
+        Some(access(winner)),
+        identify,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let identify = json!({"scan_id": unknown["id"], "capture_id": unread, "inspection": inspection,
+        "identifiers": [{"kind":"SERIAL","raw_value":"SN-NOVO-77"}]});
+    let (status, received) = call(
+        &app,
+        "POST",
+        &format!("{path}/identify"),
+        Some(access(winner)),
+        identify.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{received}");
+    assert_eq!(received["result"], "RECEIVED");
+    let (status, repeated) = call(
+        &app,
+        "POST",
+        &format!("{path}/identify"),
+        Some(access(winner)),
+        identify,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{repeated}");
+    assert_eq!(
+        repeated["confirmation"]["movement_id"],
+        received["confirmation"]["movement_id"]
+    );
+    let movements: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM custody_movements WHERE receipt_session_id = $1")
+            .bind(Uuid::parse_str(&session_id).unwrap())
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(movements, 3);
+
+    // O item que ficou para trás exige justificativa e volta a ficar livre.
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("{path}/close"),
+        Some(access(winner)),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("{path}/close"),
+        Some(access(winner)),
+        json!({"reason": "LOTE-0002 não veio na pilha"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, finished) = call(&app, "GET", &batch_path, Some(access(&tech)), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{finished}");
+    assert_eq!(finished["batch"]["status"], "CLOSED");
+    assert_eq!(finished["batch"]["total"], 4, "{finished}");
+    assert_eq!(finished["batch"]["received"], 3);
+    assert_eq!(finished["batch"]["unidentified"], 0);
+    let (_, custody) = call(
+        &app,
+        "GET",
+        "/api/v1/me/custody",
+        Some(access(&tech)),
+        Value::Null,
+    )
+    .await;
+    let items = custody["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{custody}");
+    assert_eq!(items[0]["equipment_id"], json!(left_behind));
+    assert!(items[0]["batch_id"].is_null());
+    let (status, next) = call(
+        &app,
+        "POST",
+        "/api/v1/me/batches",
+        Some(access(&tech)),
+        json!({"client_batch_id": Uuid::new_v4(), "capture_ids": [behind_capture]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    let next_id = next["batch"]["id"].as_str().unwrap();
+    let (status, cancelled) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/me/batches/{next_id}/cancel"),
+        Some(access(&tech)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["batch"]["status"], "CANCELLED");
+    assert!(
+        sqlx::query("DELETE FROM delivery_batches")
+            .execute(&db)
+            .await
+            .is_err(),
+        "o histórico de lotes é permanente"
+    );
+}

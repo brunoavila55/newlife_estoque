@@ -18,9 +18,11 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
     if (path.endsWith('/receipt-sessions')) {
       return route.fulfill({ json: { items: [], next_cursor: null } })
     }
-    if (path.endsWith('/receipt-technicians')) {
+    if (path.endsWith('/warehouse/batches')) {
       if (request.headers().authorization !== 'Bearer renewed-token') return route.fulfill({ status: 401 })
-      return route.fulfill({ json: { items: [technician], next_cursor: null } })
+      return route.fulfill({ json: { items: [{ id: 'batch', number: 7, technician_id: 'tech', technician_name: technician.name,
+        status: 'SUBMITTED', notes: null, receipt_session_id: null, clerk_name: null, created_at: '2026-11-24T14:30:00Z',
+        finished_at: null, total: 3, unidentified: 0, received: 0 }], next_cursor: null } })
     }
     if (path.endsWith('/admin/users')) {
       if (request.method() === 'GET') {
@@ -56,10 +58,10 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
   await page.getByLabel('Senha', { exact: true }).fill('senha-de-teste-local')
   await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
   const menu = page.getByRole('navigation', { name: 'Módulos do estoque' })
-  await expect(menu.getByRole('button', { name: 'Revisão de OCR' })).toBeVisible()
-  await menu.getByRole('button', { name: 'Mesa de recebimento' }).click()
-  await expect(page.getByRole('heading', { name: 'Recebimento de equipamentos' })).toBeVisible()
-  await expect(page.getByRole('option', { name: /Técnica de campo/ })).toBeAttached()
+  await expect(menu.getByRole('button', { name: 'Revisão de fotos' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Lotes para conferir' })).toBeVisible()
+  await expect(page.getByText('Lote 0007')).toBeVisible()
+  await expect(page.getByText(technician.name)).toBeVisible()
   expect(refreshed).toBe(true)
   await menu.getByRole('button', { name: 'Usuários e permissões', exact: true }).click()
   await expect(page.getByText('admin · Administrador · Ativo')).toBeVisible()

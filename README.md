@@ -28,9 +28,28 @@ Entre com a conta administrativa e abra **Usuários**. Em **Criar usuário**, in
 
 Na linha de um técnico, selecione **Abrir técnico**. A aba **Em posse** lista os equipamentos identificados sob sua custódia atual. A aba **Já entregues** mostra os equipamentos com recebimento físico confirmado, com data e depósito. O histórico inclui confirmações feitas em sessões ainda abertas.
 
-## Estoque do técnico
+## Como o fluxo funciona
 
-Na área do técnico, abra **Estoque** para consultar os equipamentos identificados que estão sob sua custódia e aguardam devolução. A consulta exige conexão e usa a conta autenticada. Use **Atualizar** para refletir as últimas validações e devoluções confirmadas pelo depósito. As capturas e os lotes continuam disponíveis na **Carteira**, em **Lotes** e na **Fila**.
+1. **Coletar.** No celular, o técnico fotografa a etiqueta de cada roteador. A foto fica salva no aparelho e é enviada quando houver conexão.
+2. **Comigo.** Lista o que está sob responsabilidade do técnico: equipamentos identificados e fotos ainda sem identificação. O técnico seleciona o que vai entregar e toca em **Montar lote**. O lote recebe um número curto, por exemplo **Lote 0012**.
+3. **Balcão.** O técnico entrega a pilha e informa o número do lote. Em **Lotes para conferir**, o estoquista abre o lote e bipa cada equipamento. Depois do bipe, **Enter** com o campo vazio confirma o recebimento com o padrão de fonte, cabos e estado. Exceções exigem um clique.
+4. **Encerrar.** Ao encerrar, o sistema gera o comprovante de devolução. O que não foi bipado continua com o técnico e pode entrar em outro lote. Faltantes, ocorrências ou fotos sem identificação exigem justificativa.
+
+O lote nunca transfere custódia sozinho. Cada equipamento só sai do técnico quando o estoque confirma o bipe correspondente.
+
+### Situações no balcão
+
+- **Está no lote:** confira e aperte Enter.
+- **Fora do lote:** o equipamento é do técnico, mas não foi colocado no lote. **Incluir no lote** adiciona o item à conferência, e ele ainda precisa ser confirmado.
+- **Identificar pela foto:** o código ainda não está cadastrado, mas o lote tem fotos sem identificação. O estoquista compara a foto com o equipamento e confirma. O código bipado passa a identificar o equipamento, com a mesma validação da revisão de OCR. Em caso de conflito, a foto vai para a revisão do administrador e a custódia não muda.
+- **Outro técnico, já recebido ou código ambíguo:** separe o equipamento. A leitura fica registrada nas ocorrências do lote.
+
+### Área do estoque
+
+- **Lotes para conferir:** fila de lotes enviados pelos técnicos, com busca por número ou nome.
+- **Estoque por técnico:** quantos equipamentos cada técnico tem, quantas fotos ainda não foram identificadas, lotes abertos e há quantos dias está o item mais antigo. Mais de 7 dias aparece em vermelho.
+- **Comprovantes:** conferências abertas pelo estoquista, com o comprovante para impressão.
+- **Rastrear equipamento:** histórico de custódia por serial ou MAC.
 
 ## Captura offline
 
@@ -54,15 +73,9 @@ Use `OCR_TESSERACT_BIN` para indicar outro caminho e `OCR_LANGUAGE` para escolhe
 
 Entre no mesmo aplicativo com a conta de administrador. Em **Revisão de etiquetas**, abra uma captura, confira a foto original e os valores sugeridos, ajuste ou adicione os identificadores e confirme a identificação. Leituras anteriores e o resultado bruto ficam disponíveis na captura. Uma etiqueta ilegível ou divergente pode ficar pendente com justificativa. O administrador pode pedir nova leitura de uma falha de OCR ou de uma captura que ainda aguarda decisão humana. A revisão exige conexão.
 
-## Recebimento no depósito piloto
+## Leitor de código de barras
 
-Entre como administrador ou estoquista e abra a **Mesa de recebimento**. Abra uma sessão para o técnico que está entregando os equipamentos. O sistema fixa a lista de equipamentos previstos naquele momento. Uma coleta validada depois da abertura pode ser conferida em outra sessão.
-
-Com o cursor em **Código lido**, use um scanner USB ou Bluetooth no modo teclado. Configure o mesmo sufixo no scanner e no painel, **Enter** ou **Tab**. Também é possível digitar e clicar em **Buscar código**. Para conferir dois identificadores, informe o segundo antes de enviar a leitura principal.
-
-Quando o painel localizar um item, confira os identificadores e, se necessário, abra a foto da etiqueta. Marque a conferência física e confirme o recebimento. O equipamento só sai do estoque do técnico após a confirmação do servidor. A sessão conserva a lista de previstos, confirmados, faltantes, leituras duplicadas e divergências. Encerrar com faltantes ou divergências exige justificativa. Itens sem identificação verificável ficam pendentes.
-
-Em **Receber pilha**, uma etiqueta desconhecida pode apontar para coletas ainda em revisão. O administrador pode abrir a coleta pela referência informada no balcão e comparar a foto original. Após a validação, consulte o código novamente. Em cada entrega, informe fonte, cabos e conservação. O comprovante impresso inclui os identificadores de todos os itens da sessão, inclusive faltantes. Os módulos de saldos, busca de equipamento e sessões permitem consultar a custódia e o histórico.
+Use um leitor USB ou Bluetooth no modo teclado e configure o sufixo **Enter** ou **Tab**, o mesmo escolhido na mesa de conferência. O campo de leitura recupera o foco automaticamente. A busca global fica oculta durante a conferência para que um bipe não tire o estoquista do lote. Use **Testar leitor** para conferir a configuração.
 
 ## Testes
 

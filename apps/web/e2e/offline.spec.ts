@@ -14,22 +14,35 @@ async function signIn(page: Page, login = technician.login) {
   await page.getByLabel('Login').fill(login)
   await page.getByLabel('Senha').fill('senha-de-teste-local')
   await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Recolhimentos' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Coletar' })).toBeVisible()
 }
 
 function technicianNav(page: Page, name: string) {
   return page.getByRole('navigation', { name: 'Área do técnico' }).getByRole('button', { name, exact: true })
 }
 
-async function saveFromGallery(page: Page, file = photo, serial?: string) {
-  await technicianNav(page, 'Registrar').click()
+async function saveFromGallery(page: Page, file = photo, code?: string) {
+  await technicianNav(page, 'Coletar').click()
   await page.locator('input[type=file]:not([capture])').setInputFiles(file)
-  if (serial) await page.getByLabel('Número de Série (SN)').fill(serial)
-  await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
+  if (code) await page.getByLabel(/Código da etiqueta/).fill(code)
+  await page.getByRole('button', { name: 'Salvar e parar' }).click()
 }
 
-test('técnico consulta sua custódia atual e volta a consultar ao reconectar', async ({ page, context }) => {
+/** Abre Envios e confere quantas fotos ainda estão só no celular. */
+async function expectPending(page: Page, count: number) {
+  await technicianNav(page, 'Envios').click()
+  await expect(page.getByText(count === 0 ? 'Tudo enviado' : `${count} foto${count > 1 ? 's' : ''} para enviar`, { exact: true })).toBeVisible()
+}
+
+test('técnico consulta o que está com ele e monta um lote de entrega', async ({ page, context }) => {
   let received = false
+  let created: Record<string, unknown> | undefined
+  const item = (id: string, serial: string | null) => ({
+    capture_id: id, equipment_id: serial ? 'eq-' + id : null, capture_status: serial ? 'IDENTIFIED' : 'NEEDS_REVIEW',
+    captured_at: '2026-11-23T14:00:00Z', complement: null, typed_code: serial ? null : 'SN-DIGITADO',
+    identifiers: serial ? [{ kind: 'SERIAL', raw_value: serial }] : [], suggestions: [], received_at: null,
+    batch_id: null, batch_number: null, batch_status: null,
+  })
   await page.setViewportSize({ width: 320, height: 640 })
   await context.route('**/api/v1/**', (route) => {
     const request = route.request()
@@ -37,38 +50,45 @@ test('técnico consulta sua custódia atual e volta a consultar ao reconectar', 
     if (path.endsWith('/auth/web/login')) {
       return route.fulfill({ json: { access_token: 'tech-token', expires_in: 3600, user: technician } })
     }
-    if (path === '/api/v1/me/inventory') {
+    if (path === '/api/v1/me/custody') {
       expect(request.headers().authorization).toBe('Bearer tech-token')
-      expect(new URL(request.url()).search).toBe('')
-      return route.fulfill({ json: {
-        items: received ? [] : [{
-          id: 'router',
-          identifiers: [{ kind: 'SERIAL', raw_value: '0001-O', normalized_value: '0001-O' }],
-        }],
-        next_cursor: null,
-      } })
+      return route.fulfill({ json: { items: received ? [] : [item('c1', '0001-O'), item('c2', null)] } })
+    }
+    if (path === '/api/v1/me/batches' && request.method() === 'POST') {
+      created = request.postDataJSON()
+      const batch = { id: 'b1', number: 12, technician_id: technician.id, technician_name: technician.name,
+        status: 'SUBMITTED', notes: 'Pilha de hoje', receipt_session_id: null, clerk_name: null,
+        created_at: '2026-11-23T15:00:00Z', finished_at: null, total: 2, unidentified: 1, received: 0 }
+      return route.fulfill({ json: { batch, items: [item('c1', '0001-O'), item('c2', null)]
+        .map((entry) => ({ ...entry, added_by_clerk: false })) } })
     }
     return route.fulfill({ status: 404 })
   })
 
   await page.goto('/')
   await signIn(page)
-  const stockTab = technicianNav(page, 'Meu estoque')
-  await stockTab.click()
-  await expect(stockTab).toHaveAttribute('aria-current', 'page')
-  await expect(page.getByText('Serial: 0001-O')).toBeVisible()
+  const holdings = technicianNav(page, 'Comigo')
+  await holdings.click()
+  await expect(holdings).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByText('SN 0001-O')).toBeVisible()
+  await expect(page.getByText('SN-DIGITADO (sugerido)')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Selecionar todos' }).click()
+  await page.getByRole('button', { name: 'Montar lote' }).click()
+  await page.getByLabel(/Observação para o estoque/).fill('Pilha de hoje')
+  await page.getByRole('button', { name: 'Confirmar lote' }).click()
+  await expect(page.getByText('Lote 0012')).toBeVisible()
+  await expect(page.getByText('Informe no balcão')).toBeVisible()
+  expect(created).toMatchObject({ capture_ids: ['c1', 'c2'], notes: 'Pilha de hoje' })
+  expect(created?.client_batch_id).toMatch(/^[0-9a-f-]{36}$/)
 
   received = true
-  await page.getByRole('button', { name: 'Atualizar', exact: true }).click()
-  await expect(page.getByText('Nenhum equipamento identificado em custódia.')).toBeVisible()
-  await expect(page.getByText('Serial: 0001-O')).toHaveCount(0)
-
+  await holdings.click()
+  await expect(page.getByText('Nada pendente de entrega fora de lotes.')).toBeVisible()
   await context.setOffline(true)
-  await expect(page.getByText('Conecte-se à internet para consultar os equipamentos em sua custódia.')).toBeVisible()
-  await technicianNav(page, 'Carteira').click()
-  await stockTab.click()
+  await expect(page.getByText('Sem conexão. Conecte-se para consultar e montar lotes.')).toBeVisible()
   await context.setOffline(false)
-  await expect(page.getByText('Nenhum equipamento identificado em custódia.')).toBeVisible()
+  await expect(page.getByText('Nada pendente de entrega fora de lotes.')).toBeVisible()
 })
 
 test('mantém dez fotos offline após fechar a aba e retoma um envio interrompido', async ({ page, context }) => {
@@ -109,29 +129,29 @@ test('mantém dez fotos offline após fechar a aba e retoma um envio interrompid
   await signIn(page)
   await page.evaluate(async () => { await navigator.serviceWorker.ready })
   if (!await page.evaluate(() => Boolean(navigator.serviceWorker.controller))) await page.reload()
-  await expect(page.getByRole('heading', { name: 'Recolhimentos' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Coletar' })).toBeVisible()
   await context.setOffline(true)
   await expect(page.getByText('Sem conexão', { exact: true })).toBeVisible()
   for (let index = 1; index <= 10; index++) {
     await saveFromGallery(page)
-    await expect(page.getByText(`${index} fotos pendentes`, { exact: true })).toBeVisible()
+    await expect(page.getByText('Salvo no celular.', { exact: true })).toBeVisible()
   }
+  await expectPending(page, 10)
   expect(ids.size).toBe(0)
 
   await page.close()
   const reopened = await context.newPage()
   await reopened.goto('/')
-  await technicianNav(reopened, 'Fila').click()
-  await expect(reopened.getByText('10 fotos pendentes', { exact: true })).toBeVisible()
+  await expectPending(reopened, 10)
   await expect(reopened.getByText('Aguardando envio', { exact: true })).toHaveCount(10)
   await reopened.evaluate(async () => { await Promise.all((await caches.keys()).map((key) => caches.delete(key))) })
-  await expect(reopened.getByText('10 fotos pendentes', { exact: true })).toBeVisible()
+  await expect(reopened.getByText('10 fotos para enviar', { exact: true })).toBeVisible()
 
   await context.setOffline(false)
   await expect(reopened.getByText('Envio interrompido.', { exact: false })).toBeVisible()
   await reopened.getByRole('button', { name: 'Sincronizar agora' }).click()
-  await expect(reopened.getByText('0 fotos pendentes', { exact: true })).toBeVisible()
-  await expect(reopened.getByText('Recebida, aguardando processamento', { exact: true })).toHaveCount(10)
+  await expect(reopened.getByText('Tudo enviado', { exact: true })).toBeVisible()
+  await expect(reopened.getByText('Recebida · lendo etiqueta', { exact: true })).toHaveCount(10)
   expect(ids.size).toBe(10)
   expect(completed.size).toBe(10)
 })
@@ -154,15 +174,13 @@ test('protege a fila ao trocar de conta e exibe falha de cota', async ({ page, c
   })
   await saveFromGallery(page)
   await expect(page.getByText('Pouco espaço. Sincronize as fotos antes de liberar espaço no dispositivo.', { exact: true })).toBeVisible()
-  await technicianNav(page, 'Fila').click()
-  await expect(page.getByText('0 fotos pendentes', { exact: true })).toBeVisible()
-
   await page.evaluate(() => {
     navigator.storage.estimate = async () => ({ usage: 0, quota: 1024 ** 3 })
   })
-  await technicianNav(page, 'Registrar').click()
-  await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
-  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
+  // A foto continua na tela depois da falha e pode ser salva de novo.
+  await page.getByRole('button', { name: 'Salvar e parar' }).click()
+  await expect(page.getByText('Salvo no celular.', { exact: true })).toBeVisible()
+  await expectPending(page, 1)
   await page.evaluate(() => {
     const add = IDBObjectStore.prototype.add
     IDBObjectStore.prototype.add = function (value, key) {
@@ -172,17 +190,14 @@ test('protege a fila ao trocar de conta e exibe falha de cota', async ({ page, c
   })
   await saveFromGallery(page)
   await expect(page.getByText('A foto não foi salva', { exact: false })).toBeVisible()
-  await technicianNav(page, 'Fila').click()
-  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
+  await expectPending(page, 1)
   await page.getByRole('button', { name: 'Sair', exact: true }).click()
-  await page.getByRole('button', { name: 'Sair e Manter', exact: true }).click()
+  await page.getByRole('button', { name: 'Sair mesmo assim', exact: true }).click()
   await signIn(page, next.login)
-  await technicianNav(page, 'Fila').click()
-  await expect(page.getByText('0 fotos pendentes', { exact: true })).toBeVisible()
+  await expectPending(page, 0)
   await page.getByRole('button', { name: 'Sair', exact: true }).click()
   await signIn(page)
-  await technicianNav(page, 'Fila').click()
-  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
+  await expectPending(page, 1)
 })
 
 test('lê código por ZXing offline e aceita preenchimento manual', async ({ page, context }) => {
@@ -195,18 +210,17 @@ test('lê código por ZXing offline e aceita preenchimento manual', async ({ pag
   await signIn(page)
   await page.evaluate(async () => { await navigator.serviceWorker.ready })
   if (!await page.evaluate(() => Boolean(navigator.serviceWorker.controller))) await page.reload()
-  await expect(page.getByRole('heading', { name: 'Recolhimentos' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Coletar' })).toBeVisible()
   await context.setOffline(true)
   const qr = {
     name: 'qr-etiqueta.png', mimeType: 'image/png',
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAFcAAABXAQAAAABZs+TBAAAA3klEQVR4nM2TMW7CQBBF/yBLprILqkhG7BXoXERyjmS6dJADADfIWUyFO47ASr7AjisjWf5UKNWOyzDVFF9/5s/bFeJVXOCv/qsHA7BnAWymuF446hJ7mp4Xl22hy5m5cvazu+nOzWgqnzc+HywNJelv7kes7CSnlCSN7H27PsD1D8tnKjtteErjPqA2RV36urI0oWJAkRv7gMoxH6iM8wJJ6rU7wcqlIsfvdWfeUDhK439bZ3PXr8/a4JUAQHbpspuPvvkEAHp8rIK7m9yzMj2YLAKwG0ak8fvIm/3BJ3tAbMHKibfMAAAAAElFTkSuQmCC', 'base64'),
   }
   await saveFromGallery(page, qr)
-  await expect(page.getByText('NEWLIFE-00123', { exact: true })).toBeVisible()
-
   await saveFromGallery(page, photo, 'MANUAL-00234')
+  await expectPending(page, 2)
+  await expect(page.getByText('NEWLIFE-00123', { exact: true })).toBeVisible()
   await expect(page.getByText('MANUAL-00234', { exact: true })).toBeVisible()
-  await expect(page.getByText('2 fotos pendentes', { exact: true })).toBeVisible()
 })
 
 test('lê pela câmera, confirma a foto offline e libera o dispositivo', async ({ page, context }) => {
@@ -232,17 +246,17 @@ test('lê pela câmera, confirma a foto offline e libera o dispositivo', async (
   await page.goto('/')
   await signIn(page)
   await context.setOffline(true)
-  await technicianNav(page, 'Registrar').click()
-  await page.getByRole('button', { name: 'Abrir câmera traseira' }).click()
+  await page.getByRole('button', { name: 'Fotografar etiqueta' }).click()
   await expect(page.getByText('Código: SN-00042')).toBeVisible()
   const track = await page.locator('video').evaluateHandle(video => (video.srcObject as MediaStream).getVideoTracks()[0])
   await page.getByRole('button', { name: 'Disparar Foto' }).click()
   await page.getByRole('button', { name: 'Usar esta foto' }).click()
-  await expect(page.getByText('Código na foto: SN-00042')).toBeVisible()
+  await expect(page.getByLabel(/Código da etiqueta/)).toHaveValue('SN-00042')
+  await expect(page.getByText('Código lido na foto. Confira antes de salvar.')).toBeVisible()
   await expect.poll(() => track.evaluate(t => t.readyState)).toBe('ended')
-  await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
+  await page.getByRole('button', { name: 'Salvar e parar' }).click()
+  await expectPending(page, 1)
   await expect(page.getByText('SN-00042', { exact: true })).toBeVisible()
-  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
 })
 
 test('preserva a foto pendente depois de atualizar o Service Worker', async ({ page, context }) => {
@@ -276,13 +290,9 @@ test('preserva a foto pendente depois de atualizar o Service Worker', async ({ p
     await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
     await page.evaluate(async () => { await navigator.serviceWorker.ready })
     if (!await page.evaluate(() => Boolean(navigator.serviceWorker.controller))) await page.reload()
-    await page.locator('nav').getByRole('button', { name: /Registrar/ }).click()
-
     await context.setOffline(true)
-    await page.locator('input[type=file]:not([capture])').setInputFiles(photo)
-    await page.getByLabel('Número de Série (SN)').fill('0001')
-    await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
-    await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
+    await saveFromGallery(page, photo, '0001')
+    await expectPending(page, 1)
     await context.setOffline(false)
 
     revision = 2
@@ -290,8 +300,7 @@ test('preserva a foto pendente depois de atualizar o Service Worker', async ({ p
     const update = page.getByRole('button', { name: 'Atualizar aplicativo' })
     await expect(update).toBeVisible()
     await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), update.click()])
-    await page.locator('nav').getByRole('button', { name: /Fila/ }).click()
-    await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
+    await expectPending(page, 1)
     const size = await page.evaluate(() => new Promise<number>((resolve, reject) => {
       const open = indexedDB.open('newlife-stock')
       open.onerror = reject
@@ -361,7 +370,7 @@ test('revisa o OCR com foto e confirma a correção feita pelo administrador', a
   await page.getByLabel('Login').fill('admin')
   await page.getByLabel('Senha').fill('senha-de-teste-local')
   await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
-  await page.getByRole('button', { name: /Revisão de OCR/ }).click()
+  await page.getByRole('button', { name: /Revisão de fotos/ }).click()
   await page.getByRole('button', { name: 'Abrir captura' }).click()
   await expect(page.getByRole('img', { name: 'Foto da etiqueta enviada pelo técnico' })).toBeVisible()
   const collectionDetails = page.getByRole('region', { name: 'Informações do recolhimento' })
@@ -413,16 +422,16 @@ test('retoma pelo mesmo UUID quando a resposta da confirmação se perde', async
   await page.goto('/')
   await signIn(page)
   await saveFromGallery(page)
+  await expectPending(page, 1)
   await expect(page.getByText('Envio interrompido.', { exact: false })).toBeVisible()
-  await expect(page.getByText('1 fotos pendentes', { exact: true })).toBeVisible()
   preferredRetry = true
   await page.getByRole('button', { name: 'Sincronizar agora' }).click()
-  await expect(page.getByText('Recebida, aguardando processamento')).toBeVisible()
+  await expect(page.getByText('Recebida · lendo etiqueta')).toBeVisible()
   expect(uploadRequests).toBe(1)
   expect(durableReceipts).toBe(1)
 })
 
-test('sincroniza os dados complementares do formulário do técnico', async ({ page, context }) => {
+test('sincroniza o código, a OS e a observação da coleta', async ({ page, context }) => {
   const user = { ...technician, role: 'technician' }
   await context.route('**/api/v1/**', (route) => {
     const path = new URL(route.request().url()).pathname
@@ -443,17 +452,14 @@ test('sincroniza os dados complementares do formulário do técnico', async ({ p
   await page.getByLabel('Login').fill(technician.login)
   await page.getByLabel('Senha').fill('senha-de-teste-local')
   await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
-  await page.locator('nav').getByRole('button', { name: /Registrar/ }).click()
   await page.locator('input[type=file]:not([capture])').setInputFiles(photo)
-  await page.getByLabel('Número de Série (SN)').fill('0001')
-  await page.getByLabel('Ordem de Serviço (OS) ou Contrato').fill('OS-10492')
-  await page.getByRole('button', { name: /Avariado/ }).click()
-  await page.getByRole('button', { name: 'Ausente' }).click()
-  await page.getByLabel('Observações do recolhimento').fill('Carcaça riscada.')
+  await page.getByLabel(/Código da etiqueta/).fill('0001')
+  await page.getByLabel(/Ordem de serviço/).fill('OS-10492')
+  await page.getByLabel(/Observação/).fill('Carcaça riscada.')
   const request = page.waitForRequest((request) =>
     request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/captures')
-  await page.getByRole('button', { name: /Salvar no Dispositivo/ }).click()
-  expect((await request).postDataJSON().complement).toMatchObject({
-    service_order: 'OS-10492', condition: 'DAMAGED', power_supply: 'MISSING', notes: 'Carcaça riscada.',
-  })
+  await page.getByRole('button', { name: 'Salvar e parar' }).click()
+  const body = (await request).postDataJSON()
+  expect(body.barcode_evidence).toEqual({ raw_value: '0001', source: 'MANUAL' })
+  expect(body.complement).toEqual({ service_order: 'OS-10492', notes: 'Carcaça riscada.' })
 })

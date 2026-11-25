@@ -1,18 +1,16 @@
 import { useState } from 'react'
 import { Icon, type IconName } from './icon'
-import type { UserRole } from '../types'
 import type { User } from '../db'
 
 export type DesktopModule =
-  | 'dashboard'
-  | 'receiving'
+  | 'batches'
+  | 'technicians'
   | 'history'
-  | 'catalog'
-  | 'discrepancies'
-  | 'diagnostics'
+  | 'search'
   | 'review'
   | 'users'
-  | 'onboarding'
+  | 'scanner'
+  | 'help'
 
 interface SidebarProps {
   currentModule: DesktopModule
@@ -21,31 +19,30 @@ interface SidebarProps {
   onLogout: () => void
 }
 
-const roleNames: Record<UserRole, string> = {
-  technician: 'Técnico de Campo',
-  warehouse_clerk: 'Estoquista / Conferente',
-  supervisor: 'Supervisor Operacional',
-  administrator: 'Administrador da Empresa',
-  auditor: 'Auditor de Conformidade',
-  platform_admin: 'Administrador SaaS',
+const roleNames: Record<string, string> = {
+  technician: 'Técnico',
+  warehouse_clerk: 'Estoquista',
+  administrator: 'Administrador',
 }
 
 export function Sidebar({ currentModule, onSelectModule, user, onLogout }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false)
-  const role = (user.role ?? 'warehouse_clerk') as UserRole
-  const admin = role === 'administrator'
-  const menuItems: { id: DesktopModule; label: string; icon: IconName }[] = [
-    { id: 'dashboard', label: 'Visão geral', icon: 'home' },
-    ...(admin ? [
-      { id: 'review', label: 'Revisão de OCR', icon: 'camera' },
-      { id: 'users', label: 'Usuários e permissões', icon: 'users' },
-    ] as const : []),
-    { id: 'receiving', label: 'Mesa de recebimento', icon: 'scan' },
-    { id: 'history', label: 'Histórico e comprovantes', icon: 'file' },
-    { id: 'catalog', label: 'Rastreamento', icon: 'search' },
-    { id: 'discrepancies', label: 'Divergências', icon: 'alert' },
-    { id: 'diagnostics', label: 'Teste de leitor', icon: 'scan' },
-    { id: 'onboarding', label: 'Ajuda', icon: 'help' },
+  const admin = user.role === 'administrator'
+  const groups: { title: string; items: { id: DesktopModule; label: string; icon: IconName }[] }[] = [
+    { title: 'Balcão', items: [
+      { id: 'batches', label: 'Lotes para conferir', icon: 'scan' },
+      { id: 'technicians', label: 'Estoque por técnico', icon: 'users' },
+      { id: 'history', label: 'Comprovantes', icon: 'file' },
+      { id: 'search', label: 'Rastrear equipamento', icon: 'search' },
+    ] },
+    ...(admin ? [{ title: 'Administração', items: [
+      { id: 'review', label: 'Revisão de fotos', icon: 'camera' },
+      { id: 'users', label: 'Usuários e permissões', icon: 'building' },
+    ] as { id: DesktopModule; label: string; icon: IconName }[] }] : []),
+    { title: 'Suporte', items: [
+      { id: 'scanner', label: 'Testar leitor', icon: 'tools' },
+      { id: 'help', label: 'Ajuda', icon: 'help' },
+    ] },
   ]
 
   return (
@@ -60,23 +57,18 @@ export function Sidebar({ currentModule, onSelectModule, user, onLogout }: Sideb
       </div>
 
       <nav id="warehouse-navigation" className="sidebar-menu" aria-label="Módulos do estoque">
-        {menuItems.map((item) => {
-          const isActive = currentModule === item.id
-          return (
-            <button
-              key={item.id}
-              className={`sidebar-nav-item ${isActive ? 'active' : ''}`}
+        {groups.map((group) => <div key={group.title} className="sidebar-group">
+          <span className="sidebar-group-title">{group.title}</span>
+          {group.items.map((item) => {
+            const isActive = currentModule === item.id
+            return <button key={item.id} className={`sidebar-nav-item ${isActive ? 'active' : ''}`}
               aria-current={isActive ? 'page' : undefined}
-              onClick={() => {
-                setMenuOpen(false)
-                onSelectModule(item.id)
-              }}
-            >
+              onClick={() => { setMenuOpen(false); onSelectModule(item.id) }}>
               <span className="nav-icon"><Icon name={item.icon} /></span>
               <span className="nav-label">{item.label}</span>
             </button>
-          )
-        })}
+          })}
+        </div>)}
       </nav>
 
       <div className="sidebar-footer">
@@ -84,12 +76,10 @@ export function Sidebar({ currentModule, onSelectModule, user, onLogout }: Sideb
           <div className="user-avatar">{user.name.charAt(0).toUpperCase()}</div>
           <div className="user-text">
             <strong>{user.name}</strong>
-            <span className="user-role-label">{roleNames[role] || role}</span>
+            <span className="user-role-label">{roleNames[user.role ?? ''] ?? user.role}</span>
           </div>
         </div>
-        <button className="sidebar-logout-btn" onClick={onLogout} title="Sair do Sistema">
-          Sair
-        </button>
+        <button className="sidebar-logout-btn" onClick={onLogout} title="Sair">Sair</button>
       </div>
     </aside>
   )

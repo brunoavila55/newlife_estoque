@@ -1,13 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
-import type {
-  Batch,
-  TriageRecord,
-  Discrepancy,
-  AssetModel,
-  WarehouseLocation,
-  InAppNotification,
-  UserRole,
-} from './types'
+import type { UserRole } from './types'
 
 export type { UserRole }
 export type User = { id: string; name: string; login: string; role?: UserRole }
@@ -51,12 +43,6 @@ export type StockDb = Dexie & {
   captures: EntityTable<Capture, 'id'>
   photos: EntityTable<Photo, 'id'>
   profiles: EntityTable<Profile, 'slot'>
-  batches: EntityTable<Batch, 'id'>
-  triage: EntityTable<TriageRecord, 'id'>
-  discrepancies: EntityTable<Discrepancy, 'id'>
-  models: EntityTable<AssetModel, 'id'>
-  notifications: EntityTable<InAppNotification, 'id'>
-  locations: EntityTable<WarehouseLocation, 'id'>
 }
 
 const db = new Dexie('newlife-stock') as StockDb
@@ -77,6 +63,19 @@ db.version(2).stores({
   models: 'id, manufacturer, model, active',
   notifications: 'id, read, created_at, type',
   locations: 'id, name, code',
+})
+
+// Versão 3 remove as tabelas locais de demonstração. Fotos, fila e perfis são preservados.
+db.version(3).stores({
+  captures: 'id, owner, [owner+capturedAt]',
+  photos: 'id, size',
+  profiles: 'slot',
+  batches: null,
+  triage: null,
+  discrepancies: null,
+  models: null,
+  notifications: null,
+  locations: null,
 })
 
 export const MAX_PHOTO = 12 * 1024 * 1024
@@ -199,103 +198,6 @@ export async function settle(capture: Capture, changes: Partial<Capture>): Promi
     if (current?.lease !== capture.lease) return
     await db.captures.update(capture.id, { ...changes, lease: undefined, leaseUntil: undefined })
   })
-}
-
-// Inicialização com dados padrão caso o banco esteja vazio
-export async function seedInitialDataIfNeeded(): Promise<void> {
-  try {
-    const modelsCount = await db.models.count()
-    if (modelsCount === 0) {
-      await db.models.bulkAdd([
-        {
-          id: 'model-huawei-eg8145v5',
-          manufacturer: 'Huawei',
-          model: 'EG8145V5',
-          category: 'ONT_GPON',
-          has_wifi: true,
-          ports_description: '4 GE + 1 POTS + Wi-Fi 5 AC',
-          label_pattern: 'SN: 48575443... | MAC: 12 HEX',
-          active: true,
-        },
-        {
-          id: 'model-intelbras-121ac',
-          manufacturer: 'Intelbras',
-          model: 'Action RG 1200',
-          category: 'ROUTER_WIFI6',
-          has_wifi: true,
-          ports_description: '1 WAN Giga + 3 LAN Giga + Dual Band AC1200',
-          label_pattern: 'S/N: 14 chars | MAC: XX:XX:XX:XX:XX:XX',
-          active: true,
-        },
-        {
-          id: 'model-zte-f670l',
-          manufacturer: 'ZTE',
-          model: 'ZXHN F670L',
-          category: 'ONT_GPON',
-          has_wifi: true,
-          ports_description: '4 GE + 1 POTS + Wi-Fi AC Dual Band',
-          label_pattern: 'ZTE GC SN | MAC: 12 HEX',
-          active: true,
-        },
-        {
-          id: 'model-fiberhome-an5506',
-          manufacturer: 'Fiberhome',
-          model: 'AN5506-04-F',
-          category: 'ONT_GPON',
-          has_wifi: true,
-          ports_description: '4 GE + 2 POTS + Wi-Fi',
-          label_pattern: 'FHTT... | MAC: 12 HEX',
-          active: true,
-        },
-      ])
-    }
-
-    const locationsCount = await db.locations.count()
-    if (locationsCount === 0) {
-      await db.locations.bulkAdd([
-        {
-          id: '00000000-0000-4000-8000-000000000001',
-          name: 'Depósito Piloto - Sala 01',
-          code: 'DEP-PILOTO',
-          city: 'São Paulo',
-          address: 'Av. Paulista, 1000 - Andar 2',
-          areas: ['Bancada de Recebimento', 'Prateleira A1', 'Prateleira A2', 'Quarentena'],
-        },
-        {
-          id: '00000000-0000-4000-8000-000000000002',
-          name: 'Depósito Central',
-          code: 'DEP-CENTRAL',
-          city: 'Campinas',
-          address: 'Rua das Indústrias, 500',
-          areas: ['Recepção', 'Prateleiras 01-10', 'Bancada de Triagem', 'Expedição'],
-        },
-      ])
-    }
-
-    const notifCount = await db.notifications.count()
-    if (notifCount === 0) {
-      await db.notifications.bulkAdd([
-        {
-          id: 'notif-welcome',
-          type: 'INFO',
-          title: 'Sistema New Life Ativo',
-          message: 'Controle de recolhimento e devolução de equipamentos configurado com sucesso.',
-          read: false,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: 'notif-audit',
-          type: 'INFO',
-          title: 'Rastreabilidade P0 em vigor',
-          message: 'Toda movimentação gera log imutável de auditoria. OCR é sugestão, conferência é validação.',
-          read: false,
-          created_at: new Date(Date.now() - 3600_000).toISOString(),
-        },
-      ])
-    }
-  } catch {
-    // Non-fatal if index error or background transaction
-  }
 }
 
 export { db }

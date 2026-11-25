@@ -9,6 +9,7 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 
 mod auth;
 mod backup;
+mod batches;
 mod captures;
 mod custody;
 mod error;
@@ -133,6 +134,30 @@ fn router(state: AppState) -> Router {
             post(auth::reset_password),
         )
         .route("/api/v1/me/inventory", get(custody::inventory))
+        .route("/api/v1/me/custody", get(batches::my_custody))
+        .route(
+            "/api/v1/me/batches",
+            get(batches::my_batches).post(batches::create),
+        )
+        .route("/api/v1/me/batches/{id}", get(batches::my_batch))
+        .route("/api/v1/me/batches/{id}/cancel", post(batches::cancel))
+        .route(
+            "/api/v1/warehouse/technicians-summary",
+            get(batches::technicians_summary),
+        )
+        .route(
+            "/api/v1/warehouse/technicians/{id}/custody",
+            get(batches::technician_custody),
+        )
+        .route("/api/v1/warehouse/batches", get(batches::warehouse_batches))
+        .route(
+            "/api/v1/warehouse/batches/{id}",
+            get(batches::warehouse_batch),
+        )
+        .route(
+            "/api/v1/warehouse/batches/{id}/receive",
+            post(batches::receive),
+        )
         .route("/api/v1/captures/{id}/image-url", get(custody::image_url))
         .route("/api/v1/captures/{id}/review", post(custody::review))
         .route("/api/v1/captures", post(captures::create))
@@ -162,6 +187,18 @@ fn router(state: AppState) -> Router {
             post(receipts::confirm),
         )
         .route("/api/v1/receipt-sessions/{id}/close", post(receipts::close))
+        .route(
+            "/api/v1/receipt-sessions/{id}/identify",
+            post(receipts::identify),
+        )
+        .route(
+            "/api/v1/receipt-sessions/{id}/include",
+            post(receipts::include),
+        )
+        .route(
+            "/api/v1/receipt-sessions/{id}/captures/{capture_id}/image-url",
+            get(receipts::capture_image_url),
+        )
         .route(
             "/api/v1/receipt-sessions/{id}/items/{equipment_id}",
             get(receipts::get_item),

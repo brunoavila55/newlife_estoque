@@ -17,7 +17,7 @@ use crate::{
 
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "UPPERCASE")]
-enum Kind {
+pub(crate) enum Kind {
     Serial,
     Mac,
     Barcode,
@@ -35,15 +35,15 @@ impl Kind {
 
 #[derive(Deserialize)]
 pub struct SubmittedIdentifier {
-    kind: Kind,
-    raw_value: String,
+    pub(crate) kind: Kind,
+    pub(crate) raw_value: String,
 }
 
 #[derive(Deserialize, Serialize, sqlx::FromRow)]
-struct Identifier {
-    kind: String,
-    raw_value: String,
-    normalized_value: String,
+pub(crate) struct Identifier {
+    pub(crate) kind: String,
+    pub(crate) raw_value: String,
+    pub(crate) normalized_value: String,
 }
 
 impl SubmittedIdentifier {
@@ -111,21 +111,35 @@ pub enum ReviewInput {
 }
 
 #[derive(sqlx::FromRow)]
-struct Capture {
-    id: Uuid,
-    technician_id: Uuid,
-    equipment_id: Option<Uuid>,
-    image_object_key: String,
+pub(crate) struct Capture {
+    pub(crate) id: Uuid,
+    pub(crate) technician_id: Uuid,
+    pub(crate) equipment_id: Option<Uuid>,
+    pub(crate) image_object_key: String,
     status: String,
     review_issue: Option<Value>,
     validated_identifiers: Option<Value>,
 }
 
+/// Bloqueia a captura para uma decisão de identidade.
+pub(crate) async fn lock_capture(
+    db: &mut PgConnection,
+    id: Uuid,
+) -> Result<Option<Capture>, ApiError> {
+    Ok(sqlx::query_as(
+        "SELECT id, technician_id, equipment_id, image_object_key, status, review_issue, validated_identifiers
+         FROM captures WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?)
+}
+
 #[derive(Serialize)]
 pub struct ReviewResult {
-    status: &'static str,
-    equipment_id: Option<Uuid>,
-    issue: Option<Value>,
+    pub(crate) status: &'static str,
+    pub(crate) equipment_id: Option<Uuid>,
+    pub(crate) issue: Option<Value>,
 }
 
 pub async fn image_url(
@@ -155,10 +169,9 @@ pub async fn review(
     Body(input): Body<ReviewInput>,
 ) -> Result<Json<ReviewResult>, ApiError> {
     let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
-    let capture: Capture = sqlx::query_as(
-        "SELECT id, technician_id, equipment_id, image_object_key, status, review_issue, validated_identifiers
-         FROM captures WHERE id = $1 FOR UPDATE",
-    ).bind(parse_id(&id)?).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
+    let capture = lock_capture(&mut tx, parse_id(&id)?)
+        .await?
+        .ok_or_else(ApiError::missing)?;
 
     let result =
         match input {
@@ -225,7 +238,9 @@ pub async fn review(
     Ok(Json(result))
 }
 
-fn checked_identifiers(submitted: Vec<SubmittedIdentifier>) -> Result<Vec<Identifier>, ApiError> {
+pub(crate) fn checked_identifiers(
+    submitted: Vec<SubmittedIdentifier>,
+) -> Result<Vec<Identifier>, ApiError> {
     if !(1..=16).contains(&submitted.len()) {
         return Err(ApiError::invalid("Informe de 1 a 16 identificadores."));
     }
@@ -297,7 +312,7 @@ async fn flag(
     })
 }
 
-async fn validate(
+pub(crate) async fn validate(
     db: &mut PgConnection,
     actor: Uuid,
     capture: &Capture,
@@ -453,7 +468,10 @@ pub async fn admin_inventory(
     Ok(Json(page))
 }
 
-async fn require_technician(db: &mut PgConnection, technician_id: Uuid) -> Result<(), ApiError> {
+pub(crate) async fn require_technician(
+    db: &mut PgConnection,
+    technician_id: Uuid,
+) -> Result<(), ApiError> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND role = 'technician')",
     )

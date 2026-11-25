@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { registerSW } from 'virtual:pwa-register'
 import { ApiError, clearAccess, enter, leave, lockDevice, restoreStaff, resumeSession } from './api'
-import { db, seedInitialDataIfNeeded, type Profile, type User } from './db'
+import { db, type User } from './db'
 import { TechDesk } from './technician/tech_desk'
 import { DesktopShell } from './desktop_shell'
 import { Icon } from './components/icon'
@@ -181,7 +181,6 @@ function App() {
   }, [])
 
   useEffect(() => {
-    void seedInitialDataIfNeeded()
     updater.current = registerSW({
       onOfflineReady: () => setOfflineReady(true),
       onNeedRefresh: () => setUpdate(true),

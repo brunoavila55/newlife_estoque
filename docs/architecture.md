@@ -54,6 +54,16 @@ O scan registra o resultado e a origem da leitura. A confirmação bloqueia sess
 A sessão exibe previstos, confirmados, faltantes, duplicados e divergências. Um novo scan de item já localizado e ainda pendente conta como leitura duplicada. Scans de itens já recebidos ou fora da lista permanecem no histórico de divergências. O fechamento preserva faltantes e divergências e exige justificativa quando houver. A reversão da migration de recebimento é permitida enquanto a base não tiver sessões de recebimento.
 
 
+## Lotes de devolução
+
+`delivery_batches` e `delivery_batch_items` registram a entrega declarada pelo técnico. Um item aponta para uma coleta, identificada ou não. Um índice único parcial impede que a mesma coleta esteja em dois lotes abertos. Triggers limitam o ciclo a `SUBMITTED → RECEIVING → CLOSED` ou `SUBMITTED → CANCELLED` e bloqueiam a exclusão do histórico.
+
+Abrir a conferência (`/warehouse/batches/{id}/receive`) cria uma `receipt_session` vinculada ao lote. Os itens previstos são os equipamentos identificados do lote que continuam com o técnico. A transferência de custódia segue a mesma confirmação item a item de qualquer sessão. Uma coleta identificada pela revisão depois da abertura passa a ser prevista no primeiro bipe.
+
+Coletas sem identificação são resolvidas no balcão por `/receipt-sessions/{id}/identify`. O pedido exige uma leitura `UNKNOWN` da sessão e o código bipado entre os identificadores. Ele reaproveita `custody::validate`, que bloqueia `equipment_identifiers` e trata conflitos como revisão pendente. Em seguida, confirma o recebimento na mesma transação. `/include` adiciona à sessão um equipamento do mesmo técnico que estava fora do lote, sem transferir custódia.
+
+O encerramento da sessão encerra o lote e libera os itens não recebidos para um novo lote. Faltantes, ocorrências e coletas sem identificação exigem justificativa.
+
 ## Operação e recuperação
 
 A API separa a saúde do processo da prontidão do PostgreSQL e do storage. As métricas usam um token dedicado. Consultas de auditoria e do relatório de retenção exigem a conta administrativa. Logs HTTP registram o modelo da rota, o status, a duração e o identificador da requisição.
