@@ -2062,3 +2062,186 @@ async fn delivery_batches_scope_receipt_and_identify_at_counter(db: PgPool) {
         "o histórico de lotes é permanente"
     );
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn admin_edits_profile_role_and_reactivates_accounts(db: PgPool) {
+    let (app, _permit) = fixture(&db).await;
+    let admin = login(&app, "admin").await;
+    let clerk = create_account(&app, &admin, "estoquista", "warehouse_clerk").await;
+    let tech = create_technician(&app, &admin, "tecnico").await;
+    let clerk_session = login(&app, "estoquista").await;
+    let user = |id: Uuid| format!("/api/v1/admin/users/{id}");
+
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &user(tech),
+            Some(access(&clerk_session)),
+            json!({"name": "X"})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let admin_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE login = 'reviewer'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    for target in [admin_id] {
+        assert_eq!(
+            call(
+                &app,
+                "PATCH",
+                &user(target),
+                Some(access(&admin)),
+                json!({"name": "X"})
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                &format!("{}/enable", user(target)),
+                Some(access(&admin)),
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &user(clerk),
+            Some(access(&admin)),
+            json!({"role": "administrator"})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &app,
+            "PATCH",
+            &user(clerk),
+            Some(access(&admin)),
+            json!({"name": "  "})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Name-only edits keep the person's sessions.
+    let (status, renamed) = call(
+        &app,
+        "PATCH",
+        &user(clerk),
+        Some(access(&admin)),
+        json!({"name": " Maria Estoque "}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["name"], "Maria Estoque");
+    assert_eq!(renamed["role"], "warehouse_clerk");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/auth/refresh",
+            None,
+            refresh(&clerk_session)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    // A role change revokes sessions issued for the previous role.
+    let clerk_session = login(&app, "estoquista").await;
+    let (status, changed) = call(
+        &app,
+        "PATCH",
+        &user(clerk),
+        Some(access(&admin)),
+        json!({"role": "technician"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["role"], "technician");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/auth/refresh",
+            None,
+            refresh(&clerk_session)
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (before, after): (Value, Value) = sqlx::query_as(
+        "SELECT before_json, after_json FROM audit_events
+         WHERE action = 'USER_UPDATED' AND entity_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(clerk)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(before["role"], "warehouse_clerk");
+    assert_eq!(after["role"], "technician");
+
+    // A technician with pending captures keeps the profile.
+    capture(&db, tech, "pending").await;
+    let (status, blocked) = call(
+        &app,
+        "PATCH",
+        &user(tech),
+        Some(access(&admin)),
+        json!({"role": "warehouse_clerk"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{blocked}");
+    assert_eq!(blocked["code"], "ROLE_CHANGE_BLOCKED");
+    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = $1")
+        .bind(tech)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(role, "technician");
+
+    // Disable, then reactivate exactly once.
+    let disable = format!("{}/disable", user(tech));
+    let enable = format!("{}/enable", user(tech));
+    assert_eq!(
+        call(&app, "POST", &disable, Some(access(&admin)), Value::Null)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            call(&app, "POST", &enable, Some(access(&admin)), Value::Null)
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+    }
+    login(&app, "tecnico").await;
+    let enabled: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'USER_ENABLED' AND entity_id = $1",
+    )
+    .bind(tech)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(enabled, 1);
+}

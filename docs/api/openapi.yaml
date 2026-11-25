@@ -354,6 +354,48 @@ paths:
               schema: { $ref: '#/components/schemas/User' }
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      operationId: updateUser
+      summary: Alterar nome ou perfil de técnico ou estoquista
+      description: >-
+        Requer papel de administrador. Administradores não podem ser alterados por esta rota.
+        A troca de perfil revoga as sessões da conta e é recusada com 409 ROLE_CHANGE_BLOCKED
+        enquanto o técnico tiver equipamentos em posse, capturas sem identificação, lotes em aberto
+        ou sessões de recebimento abertas, ou enquanto o estoquista tiver sessões de recebimento abertas.
+        Toda alteração gera o evento de auditoria USER_UPDATED com valores anteriores e novos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                role: { enum: [technician, warehouse_clerk] }
+      responses:
+        '200':
+          description: Conta após a alteração
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users/{id}/enable:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: enableUser
+      summary: Reativar técnico ou estoquista desativado
+      description: Requer papel de administrador. Idempotente; a senha atual volta a valer.
+      responses:
+        '204': { description: Conta ativa }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/admin/users/{id}/disable:
     parameters:
       - $ref: '#/components/parameters/Id'

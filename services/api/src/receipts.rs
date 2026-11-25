@@ -180,7 +180,8 @@ pub async fn open(
 ) -> Result<Json<Value>, ApiError> {
     let (mut tx, actor) = authorize_receive(&state, &headers).await?;
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND role = 'technician')",
+        // FOR SHARE serializa com a troca de perfil da conta, que bloqueia a linha.
+        "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND role = 'technician' FOR SHARE)",
     )
     .bind(input.technician_id)
     .fetch_one(&mut *tx)

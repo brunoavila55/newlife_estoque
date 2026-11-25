@@ -2,7 +2,7 @@ use std::{env, sync::Arc};
 
 use axum::{
     Json, Router,
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
 };
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -120,6 +120,8 @@ fn router(state: AppState) -> Router {
             "/api/v1/admin/users",
             get(auth::list_users).post(auth::create_user),
         )
+        .route("/api/v1/admin/users/{id}", patch(auth::update_user))
+        .route("/api/v1/admin/users/{id}/enable", post(auth::enable_user))
         .route(
             "/api/v1/admin/users/{id}/inventory",
             get(custody::admin_inventory),

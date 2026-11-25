@@ -44,6 +44,7 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
   const [selected, setSelected] = useState<User>()
   const [loading, setLoading] = useState(false)
   const [listError, setListError] = useState('')
+  const [managing, setManaging] = useState<ManagedUser>()
 
   const fail = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) denied()
@@ -86,13 +87,22 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
               <td className="mono">{user.login}</td>
               <td>{roleLabels[user.role ?? 'technician']}</td>
               <td><span className={'badge ' + (user.active ? 'badge-success' : 'badge-muted')}>{user.active ? 'Ativo' : 'Desativado'}</span></td>
-              <td className="num">{user.role === 'technician' && <button className="small-btn" onClick={() => setSelected(user)}>Abrir técnico</button>}</td>
+              <td className="num"><div className="row-actions">
+                {user.role === 'technician' && <button className="small-btn" onClick={() => setSelected(user)}>Abrir técnico</button>}
+                {user.role !== 'administrator' && <button className="small-btn" onClick={() => setManaging(user)}>Gerenciar</button>}
+              </div></td>
             </tr>)}
             {page?.items.length === 0 && <tr><td colSpan={5} className="empty-cell">Nenhum usuário cadastrado.</td></tr>}
           </tbody>
         </table>
       </div>
       {page?.next_cursor && <button disabled={loading} onClick={() => void load(page.next_cursor!)}>Carregar mais usuários</button>}
+      {managing && <UserManager key={managing.id} owner={owner} user={managing} fail={fail}
+        close={() => setManaging(undefined)}
+        changed={(user) => {
+          setManaging(user)
+          setPage((previous) => previous && { ...previous, items: previous.items.map((item) => item.id === user.id ? user : item) })
+        }} />}
     </section>
   )
 }
@@ -165,4 +175,135 @@ function UserRegistration({ owner, denied }: { owner: string; denied: () => void
       {created && <p className="success" role="status">{created}</p>}
     </section>
   )
+}
+
+function generatedPassword() {
+  // Sem caracteres ambíguos (0/O, 1/l/I) para facilitar o repasse verbal.
+  const alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const bytes = crypto.getRandomValues(new Uint32Array(16))
+  return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('')
+}
+
+function UserManager({ owner, user, fail, close, changed }: {
+  owner: string; user: ManagedUser; fail: (failure: unknown) => string
+  close: () => void; changed: (user: ManagedUser) => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [name, setName] = useState(user.name)
+  const [role, setRole] = useState(user.role ?? 'technician')
+  const [password, setPassword] = useState('')
+  const [revealed, setRevealed] = useState(false)
+  const [confirmDisable, setConfirmDisable] = useState(false)
+
+  async function run(work: () => Promise<string>) {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      setNotice(await work())
+    } catch (failure) {
+      setError(fail(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const path = '/admin/users/' + user.id
+  const json = { 'Content-Type': 'application/json' }
+  const roleChanged = role !== user.role
+
+  function save(event: FormEvent) {
+    event.preventDefault()
+    void run(async () => {
+      const updated = await administrator<ManagedUser>(owner, path, {
+        method: 'PATCH', headers: json,
+        body: JSON.stringify({ name, ...(roleChanged ? { role } : {}) }),
+      })
+      changed(updated)
+      return roleChanged
+        ? 'Dados salvos. O perfil agora é ' + roleLabels[updated.role ?? 'technician'] + ' e as sessões abertas foram encerradas.'
+        : 'Dados salvos.'
+    })
+  }
+
+  function reset(event: FormEvent) {
+    event.preventDefault()
+    void run(async () => {
+      await administrator<void>(owner, path + '/reset-password', {
+        method: 'POST', headers: json, body: JSON.stringify({ password }),
+      })
+      return 'Senha redefinida. As sessões abertas de ' + user.name + ' foram encerradas; entregue a nova senha por um canal seguro.'
+    })
+  }
+
+  function toggleActive() {
+    void run(async () => {
+      await administrator<void>(owner, path + (user.active ? '/disable' : '/enable'), { method: 'POST' })
+      changed({ ...user, active: !user.active })
+      setConfirmDisable(false)
+      return user.active ? 'Conta desativada e sessões encerradas.' : 'Conta reativada. A pessoa já pode entrar com a senha atual.'
+    })
+  }
+
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="user-manager-title"
+    onClick={(event) => { if (event.target === event.currentTarget && !busy) close() }}
+    onKeyDown={(event) => { if (event.key === 'Escape' && !busy) close() }}>
+    <section className="card modal-panel">
+      <div className="section-head">
+        <div>
+          <h2 id="user-manager-title">{user.name}</h2>
+          <p><span className="mono">{user.login}</span> · {roleLabels[user.role ?? 'technician']} · {user.active ? 'Ativo' : 'Desativado'}</p>
+        </div>
+        <button type="button" className="small-btn" onClick={close} disabled={busy} autoFocus>Fechar</button>
+      </div>
+      {error && <p className="alert" role="alert">{error}</p>}
+      {notice && <p className="success" role="status">{notice}</p>}
+
+      <form className="task-panel" onSubmit={save}>
+        <h3>Dados e permissões</h3>
+        <fieldset className="user-fields" disabled={busy}>
+          <label>Nome<input value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} /></label>
+          <label>Perfil<select value={role} onChange={(event) => setRole(event.target.value as typeof role)}>
+            <option value="technician">Técnico</option>
+            <option value="warehouse_clerk">Estoquista</option>
+          </select></label>
+          {roleChanged && <small>Trocar o perfil encerra as sessões da pessoa. Técnicos com equipamentos em posse, capturas sem identificação, lotes ou sessões de recebimento em aberto não podem mudar de perfil até a pendência ser resolvida.</small>}
+          <button className="primary" type="submit" disabled={name.trim() === user.name && !roleChanged}>{busy ? 'Salvando…' : 'Salvar alterações'}</button>
+        </fieldset>
+      </form>
+
+      <form className="task-panel" onSubmit={reset}>
+        <h3>Redefinir senha</h3>
+        <p className="muted">A nova senha passa a valer imediatamente e todas as sessões da pessoa são encerradas.</p>
+        <fieldset className="user-fields" disabled={busy}>
+          <label>Nova senha<input type={revealed ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)}
+            required minLength={12} autoComplete="new-password" aria-describedby="reset-format" /></label>
+          <small id="reset-format">Use pelo menos 12 caracteres.</small>
+          <div className="actions">
+            <button type="button" className="small-btn" onClick={() => { setPassword(generatedPassword()); setRevealed(true) }}>Gerar senha</button>
+            <button type="button" className="small-btn" onClick={() => setRevealed(!revealed)}>{revealed ? 'Ocultar' : 'Mostrar'}</button>
+          </div>
+          <button className="primary" type="submit">{busy ? 'Redefinindo…' : 'Redefinir senha'}</button>
+        </fieldset>
+      </form>
+
+      <div className="task-panel">
+        <h3>Acesso</h3>
+        {user.active
+          ? <p className="muted">Desativar impede novos acessos e encerra as sessões abertas. Equipamentos em posse e o histórico são preservados.</p>
+          : <p className="muted">A conta está desativada. Reativar permite entrar novamente com a senha atual.</p>}
+        <div className="actions">
+          {user.active && !confirmDisable && <button type="button" className="danger-btn" disabled={busy} onClick={() => setConfirmDisable(true)}>Desativar conta</button>}
+          {user.active && confirmDisable && <>
+            <button type="button" className="danger-btn" disabled={busy} onClick={toggleActive}>Confirmar desativação</button>
+            <button type="button" className="small-btn" disabled={busy} onClick={() => setConfirmDisable(false)}>Cancelar</button>
+          </>}
+          {!user.active && <button type="button" className="primary" disabled={busy} onClick={toggleActive}>Reativar conta</button>}
+        </div>
+      </div>
+    </section>
+  </div>
 }

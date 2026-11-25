@@ -559,6 +559,134 @@ pub async fn reset_password(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserChanges {
+    name: Option<String>,
+    role: Option<Role>,
+}
+
+/// Bloqueia a troca de perfil enquanto a conta ainda responde por custódia,
+/// capturas sem identificação, lotes ou sessões de recebimento em aberto.
+async fn role_change_blocker(
+    db: &mut PgConnection,
+    user: &User,
+) -> Result<Option<&'static str>, ApiError> {
+    let reason = match user.role {
+        Role::Technician => sqlx::query_scalar::<_, Option<String>>(
+            "SELECT CASE
+                WHEN EXISTS (SELECT 1 FROM equipment WHERE technician_id = $1) THEN 'custody'
+                WHEN EXISTS (SELECT 1 FROM captures WHERE technician_id = $1 AND equipment_id IS NULL) THEN 'captures'
+                WHEN EXISTS (SELECT 1 FROM delivery_batches WHERE technician_id = $1
+                    AND status IN ('SUBMITTED', 'RECEIVING')) THEN 'batches'
+                WHEN EXISTS (SELECT 1 FROM receipt_sessions WHERE technician_id = $1 AND closed_at IS NULL) THEN 'sessions'
+             END",
+        ),
+        Role::WarehouseClerk => sqlx::query_scalar::<_, Option<String>>(
+            "SELECT CASE
+                WHEN EXISTS (SELECT 1 FROM receipt_sessions WHERE clerk_id = $1 AND closed_at IS NULL) THEN 'sessions'
+             END",
+        ),
+        Role::Administrator => return Err(ApiError::missing()),
+    }
+    .bind(user.id)
+    .fetch_one(db)
+    .await?;
+    Ok(reason.map(|reason| match reason.as_str() {
+        "custody" => "O técnico ainda tem equipamentos em posse. Receba-os antes de trocar o perfil.",
+        "captures" => "O técnico tem capturas aguardando identificação. Resolva-as antes de trocar o perfil.",
+        "batches" => "O técnico tem lotes de devolução em aberto. Encerre-os antes de trocar o perfil.",
+        _ => "A conta participa de sessões de recebimento em aberto. Encerre-as antes de trocar o perfil.",
+    }))
+}
+
+pub async fn update_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Body(input): Body<UserChanges>,
+) -> Result<Json<User>, ApiError> {
+    let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
+    let id = parse_id(&id)?;
+    if input.role == Some(Role::Administrator) {
+        return Err(ApiError::invalid("Selecione técnico ou estoquista."));
+    }
+    let name = input.name.as_deref().map(checked_name).transpose()?;
+    // Exclude administrators before locking the target to preserve lock order.
+    let before: User = sqlx::query_as(
+        "SELECT id, name, login, role, active FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
+    ).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
+    let name = name.unwrap_or(&before.name).to_owned();
+    let role = input.role.unwrap_or(before.role);
+    if name == before.name && role == before.role {
+        tx.commit().await?;
+        return Ok(Json(before));
+    }
+    if role != before.role
+        && let Some(reason) = role_change_blocker(&mut tx, &before).await?
+    {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "ROLE_CHANGE_BLOCKED",
+            reason,
+        ));
+    }
+    let after: User = sqlx::query_as(
+        "UPDATE users SET name = $1, role = $2 WHERE id = $3 RETURNING id, name, login, role, active",
+    )
+    .bind(&name)
+    .bind(role)
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if role != before.role {
+        // Sessões emitidas para o perfil anterior não devem sobreviver à troca.
+        revoke(&mut tx, id).await?;
+    }
+    audit(
+        &mut tx,
+        actor,
+        "USER_UPDATED",
+        "user",
+        id,
+        Some(json!({"name": before.name, "role": before.role})),
+        json!({"name": after.name, "role": after.role, "sessions_revoked": role != before.role}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(after))
+}
+
+pub async fn enable_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
+    let id = parse_id(&id)?;
+    let user: User = sqlx::query_as(
+        "SELECT id, name, login, role, active FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
+    ).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
+    if !user.active {
+        sqlx::query("UPDATE users SET active = true WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        audit(
+            &mut tx,
+            actor,
+            "USER_ENABLED",
+            "user",
+            id,
+            Some(json!({"active": false})),
+            json!({"active": true}),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn revoke(db: &mut PgConnection, id: Uuid) -> Result<(), ApiError> {
     sqlx::query("DELETE FROM sessions WHERE user_id = $1")
         .bind(id)
