@@ -330,7 +330,7 @@ paths:
         default: { $ref: '#/components/responses/Error' }
     post:
       operationId: createUser
-      summary: Cadastrar técnico ou estoquista
+      summary: Cadastrar técnico, estoquista ou administrador
       description: Requer papel de administrador.
       requestBody:
         required: true
@@ -345,7 +345,7 @@ paths:
                   type: string
                   description: Após remover espaços externos e converter as letras ASCII para minúsculas, deve corresponder a ^[a-z0-9_.-]{3,64}$.
                 password: { $ref: '#/components/schemas/NewPassword' }
-                role: { enum: [technician, warehouse_clerk] }
+                role: { enum: [technician, warehouse_clerk, administrator] }
                 whatsapp:
                   type: string
                   description: Opcional, com DDD. Aceita espaços, parênteses, hífen e +; números brasileiros de 10 ou 11 dígitos recebem o prefixo 55. Guardado só com dígitos.
@@ -362,9 +362,10 @@ paths:
       - $ref: '#/components/parameters/Id'
     patch:
       operationId: updateUser
-      summary: Alterar nome, perfil ou WhatsApp de técnico ou estoquista
+      summary: Alterar nome, perfil ou WhatsApp de uma conta
       description: >-
-        Requer papel de administrador. Administradores não podem ser alterados por esta rota.
+        Requer papel de administrador. O administrador não pode trocar o próprio perfil (409 SELF_CHANGE_BLOCKED).
+        Contas excluídas respondem 404.
         A troca de perfil revoga as sessões da conta e é recusada com 409 ROLE_CHANGE_BLOCKED
         enquanto o técnico tiver equipamentos em posse, capturas sem identificação, lotes em aberto
         ou sessões de recebimento abertas, ou enquanto o estoquista tiver sessões de recebimento abertas.
@@ -378,7 +379,7 @@ paths:
               additionalProperties: false
               properties:
                 name: { type: string, minLength: 1, maxLength: 120 }
-                role: { enum: [technician, warehouse_clerk] }
+                role: { enum: [technician, warehouse_clerk, administrator] }
                 whatsapp:
                   type: string
                   description: Opcional, com DDD. Aceita espaços, parênteses, hífen e +; números brasileiros de 10 ou 11 dígitos recebem o prefixo 55. Guardado só com dígitos. Texto vazio remove o número.
@@ -391,12 +392,35 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteUser
+      summary: Excluir conta
+      description: >-
+        Requer papel de administrador. Revoga as sessões. Conta sem nenhum vínculo (capturas,
+        movimentos, sessões de recebimento, auditoria como autor) é apagada e o login fica livre
+        (mode removed). Conta com histórico é arquivada (mode archived): sai da lista, não entra mais
+        e não pode ser reativada; o login permanece reservado para preservar a rastreabilidade.
+        Recusada com 409 DELETE_BLOCKED nas mesmas pendências da troca de perfil, e com
+        409 SELF_CHANGE_BLOCKED para a própria conta. Gera o evento USER_DELETED.
+      responses:
+        '200':
+          description: Conta excluída
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode]
+                properties:
+                  mode: { enum: [removed, archived] }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/admin/users/{id}/enable:
     parameters:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: enableUser
-      summary: Reativar técnico ou estoquista desativado
+      summary: Reativar conta desativada
       description: Requer papel de administrador. Idempotente; a senha atual volta a valer.
       responses:
         '204': { description: Conta ativa }
@@ -407,17 +431,18 @@ paths:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: disableUser
-      summary: Desativar técnico ou estoquista e revogar suas sessões
-      description: Requer papel de administrador.
+      summary: Desativar conta e revogar suas sessões
+      description: Requer papel de administrador. A própria conta não pode ser desativada (409 SELF_CHANGE_BLOCKED).
       responses:
         '204': { description: Conta desativada }
+        '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/admin/users/{id}/reset-password:
     parameters:
       - $ref: '#/components/parameters/Id'
     post:
       operationId: resetPassword
-      summary: Redefinir senha de técnico ou estoquista e revogar suas sessões
+      summary: Redefinir senha de uma conta e revogar suas sessões
       description: Requer papel de administrador.
       requestBody:
         required: true

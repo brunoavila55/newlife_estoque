@@ -120,7 +120,10 @@ fn router(state: AppState) -> Router {
             "/api/v1/admin/users",
             get(auth::list_users).post(auth::create_user),
         )
-        .route("/api/v1/admin/users/{id}", patch(auth::update_user))
+        .route(
+            "/api/v1/admin/users/{id}",
+            patch(auth::update_user).delete(auth::delete_user),
+        )
         .route("/api/v1/admin/users/{id}/enable", post(auth::enable_user))
         .route(
             "/api/v1/admin/users/{id}/inventory",

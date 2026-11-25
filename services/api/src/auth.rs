@@ -474,7 +474,7 @@ pub async fn list_users(
     }
     let mut items: Vec<User> = sqlx::query_as(
         "SELECT id, name, login, role, active, whatsapp FROM users
-         WHERE ($1::uuid IS NULL OR id > $1) ORDER BY id LIMIT $2",
+         WHERE deleted_at IS NULL AND ($1::uuid IS NULL OR id > $1) ORDER BY id LIMIT $2",
     )
     .bind(query.after)
     .bind(limit + 1)
@@ -494,9 +494,6 @@ pub async fn create_user(
 ) -> Result<(StatusCode, Json<User>), ApiError> {
     let (tx, _) = authorize(&state.db, &headers, Role::Administrator).await?;
     tx.rollback().await?;
-    if input.role == Role::Administrator {
-        return Err(ApiError::invalid("Selecione técnico ou estoquista."));
-    }
     let login = checked_login(&input.credentials.login)?;
     let name = checked_name(&input.name)?;
     let whatsapp = input
@@ -537,10 +534,12 @@ pub async fn disable_user(
 ) -> Result<StatusCode, ApiError> {
     let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
     let id = parse_id(&id)?;
-    // Exclude administrators before locking the target to preserve lock order.
-    let user: User = sqlx::query_as(
-        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
-    ).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
+    if id == actor {
+        return Err(self_blocked(
+            "Você não pode desativar a própria conta. Peça a outro administrador.",
+        ));
+    }
+    let user = target_user(&mut tx, id).await?;
     if user.active {
         sqlx::query("UPDATE users SET active = false WHERE id = $1")
             .bind(id)
@@ -573,14 +572,13 @@ pub async fn reset_password(
     tx.rollback().await?;
     let hash = hash_password(input.password).await?;
     let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
-    let changed = sqlx::query(
-        "UPDATE users SET password_hash = $1 WHERE id = $2 AND role <> 'administrator'",
-    )
-    .bind(hash)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
+    let changed =
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2 AND deleted_at IS NULL")
+            .bind(hash)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
     if changed == 0 {
         return Err(ApiError::missing());
     }
@@ -608,12 +606,48 @@ pub struct UserChanges {
     whatsapp: Option<String>,
 }
 
-/// Bloqueia a troca de perfil enquanto a conta ainda responde por custódia,
-/// capturas sem identificação, lotes ou sessões de recebimento em aberto.
-async fn role_change_blocker(
-    db: &mut PgConnection,
-    user: &User,
-) -> Result<Option<&'static str>, ApiError> {
+/// Pendência que impede trocar o perfil ou excluir a conta.
+enum Pending {
+    Custody,
+    Captures,
+    Batches,
+    Sessions,
+}
+
+impl Pending {
+    fn message(&self, deleting: bool) -> &'static str {
+        match (self, deleting) {
+            (Pending::Custody, false) => {
+                "O técnico ainda tem equipamentos em posse. Receba-os antes de trocar o perfil."
+            }
+            (Pending::Custody, true) => {
+                "O técnico ainda tem equipamentos em posse. Receba-os ou transfira-os antes de excluir a conta."
+            }
+            (Pending::Captures, false) => {
+                "O técnico tem capturas aguardando identificação. Resolva-as antes de trocar o perfil."
+            }
+            (Pending::Captures, true) => {
+                "O técnico tem capturas aguardando identificação. Resolva-as antes de excluir a conta."
+            }
+            (Pending::Batches, false) => {
+                "O técnico tem lotes de devolução em aberto. Encerre-os antes de trocar o perfil."
+            }
+            (Pending::Batches, true) => {
+                "O técnico tem lotes de devolução em aberto. Encerre-os antes de excluir a conta."
+            }
+            (Pending::Sessions, false) => {
+                "A conta participa de sessões de recebimento em aberto. Encerre-as antes de trocar o perfil."
+            }
+            (Pending::Sessions, true) => {
+                "A conta participa de sessões de recebimento em aberto. Encerre-as antes de excluir a conta."
+            }
+        }
+    }
+}
+
+/// A conta ainda responde por custódia, capturas sem identificação, lotes
+/// ou sessões de recebimento em aberto?
+async fn pending_work(db: &mut PgConnection, user: &User) -> Result<Option<Pending>, ApiError> {
     let reason = match user.role {
         Role::Technician => sqlx::query_scalar::<_, Option<String>>(
             "SELECT CASE
@@ -624,22 +658,39 @@ async fn role_change_blocker(
                 WHEN EXISTS (SELECT 1 FROM receipt_sessions WHERE technician_id = $1 AND closed_at IS NULL) THEN 'sessions'
              END",
         ),
-        Role::WarehouseClerk => sqlx::query_scalar::<_, Option<String>>(
+        // Administradores também operam a mesa de recebimento.
+        Role::WarehouseClerk | Role::Administrator => sqlx::query_scalar::<_, Option<String>>(
             "SELECT CASE
                 WHEN EXISTS (SELECT 1 FROM receipt_sessions WHERE clerk_id = $1 AND closed_at IS NULL) THEN 'sessions'
              END",
         ),
-        Role::Administrator => return Err(ApiError::missing()),
     }
     .bind(user.id)
     .fetch_one(db)
     .await?;
     Ok(reason.map(|reason| match reason.as_str() {
-        "custody" => "O técnico ainda tem equipamentos em posse. Receba-os antes de trocar o perfil.",
-        "captures" => "O técnico tem capturas aguardando identificação. Resolva-as antes de trocar o perfil.",
-        "batches" => "O técnico tem lotes de devolução em aberto. Encerre-os antes de trocar o perfil.",
-        _ => "A conta participa de sessões de recebimento em aberto. Encerre-as antes de trocar o perfil.",
+        "custody" => Pending::Custody,
+        "captures" => Pending::Captures,
+        "batches" => Pending::Batches,
+        _ => Pending::Sessions,
     }))
+}
+
+/// Trava a conta alvo. Contas excluídas não podem mais ser alteradas.
+async fn target_user(db: &mut PgConnection, id: Uuid) -> Result<User, ApiError> {
+    sqlx::query_as(
+        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(ApiError::missing)
+}
+
+/// Impede que o administrador se tranque fora: como quem age é sempre um
+/// administrador ativo, proibir a ação sobre si garante que sobre ao menos um.
+fn self_blocked(message: &'static str) -> ApiError {
+    ApiError(StatusCode::CONFLICT, "SELF_CHANGE_BLOCKED", message)
 }
 
 pub async fn update_user(
@@ -650,19 +701,13 @@ pub async fn update_user(
 ) -> Result<Json<User>, ApiError> {
     let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
     let id = parse_id(&id)?;
-    if input.role == Some(Role::Administrator) {
-        return Err(ApiError::invalid("Selecione técnico ou estoquista."));
-    }
     let name = input.name.as_deref().map(checked_name).transpose()?;
     let whatsapp = input
         .whatsapp
         .as_deref()
         .map(checked_whatsapp)
         .transpose()?;
-    // Exclude administrators before locking the target to preserve lock order.
-    let before: User = sqlx::query_as(
-        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
-    ).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
+    let before = target_user(&mut tx, id).await?;
     let name = name.unwrap_or(&before.name).to_owned();
     let role = input.role.unwrap_or(before.role);
     let whatsapp = whatsapp.unwrap_or_else(|| before.whatsapp.clone());
@@ -670,13 +715,18 @@ pub async fn update_user(
         tx.commit().await?;
         return Ok(Json(before));
     }
+    if role != before.role && id == actor {
+        return Err(self_blocked(
+            "Você não pode trocar o próprio perfil. Peça a outro administrador.",
+        ));
+    }
     if role != before.role
-        && let Some(reason) = role_change_blocker(&mut tx, &before).await?
+        && let Some(pending) = pending_work(&mut tx, &before).await?
     {
         return Err(ApiError(
             StatusCode::CONFLICT,
             "ROLE_CHANGE_BLOCKED",
-            reason,
+            pending.message(false),
         ));
     }
     let after: User = sqlx::query_as(
@@ -706,6 +756,66 @@ pub async fn update_user(
     Ok(Json(after))
 }
 
+/// Exclui a conta. Sem nenhum vínculo (capturas, movimentos, auditoria),
+/// a linha é apagada. Com histórico, a conta é arquivada: sai das listas e
+/// não entra mais, mas nomes e movimentações antigas continuam rastreáveis.
+pub async fn delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
+    let id = parse_id(&id)?;
+    if id == actor {
+        return Err(self_blocked(
+            "Você não pode excluir a própria conta. Peça a outro administrador.",
+        ));
+    }
+    let user = target_user(&mut tx, id).await?;
+    if let Some(pending) = pending_work(&mut tx, &user).await? {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "DELETE_BLOCKED",
+            pending.message(true),
+        ));
+    }
+    revoke(&mut tx, id).await?;
+    sqlx::query("SAVEPOINT delete_user")
+        .execute(&mut *tx)
+        .await?;
+    let removed = match sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+    {
+        Ok(_) => true,
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23503") => {
+            sqlx::query("ROLLBACK TO SAVEPOINT delete_user")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE users SET active = false, deleted_at = now() WHERE id = $1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            false
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let mode = if removed { "removed" } else { "archived" };
+    audit(
+        &mut tx,
+        actor,
+        "USER_DELETED",
+        "user",
+        id,
+        Some(json!(&user)),
+        json!({"mode": mode, "sessions_revoked": true}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(json!({"mode": mode})))
+}
+
 pub async fn enable_user(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -713,9 +823,7 @@ pub async fn enable_user(
 ) -> Result<StatusCode, ApiError> {
     let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
     let id = parse_id(&id)?;
-    let user: User = sqlx::query_as(
-        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 AND role <> 'administrator' FOR UPDATE",
-    ).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(ApiError::missing)?;
+    let user = target_user(&mut tx, id).await?;
     if !user.active {
         sqlx::query("UPDATE users SET active = true WHERE id = $1")
             .bind(id)

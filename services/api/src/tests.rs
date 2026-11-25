@@ -2084,48 +2084,53 @@ async fn admin_edits_profile_role_and_reactivates_accounts(db: PgPool) {
         .0,
         StatusCode::FORBIDDEN
     );
-    let admin_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE login = 'reviewer'")
+    // Administradores também são gerenciáveis, exceto a própria conta em ações que trancariam o acesso.
+    let admin_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE login = 'admin'")
         .fetch_one(&db)
         .await
         .unwrap();
-    for target in [admin_id] {
-        assert_eq!(
-            call(
-                &app,
-                "PATCH",
-                &user(target),
-                Some(access(&admin)),
-                json!({"name": "X"})
-            )
-            .await
-            .0,
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            call(
-                &app,
-                "POST",
-                &format!("{}/enable", user(target)),
-                Some(access(&admin)),
-                Value::Null
-            )
-            .await
-            .0,
-            StatusCode::NOT_FOUND
-        );
-    }
-    assert_eq!(
-        call(
-            &app,
-            "PATCH",
-            &user(clerk),
-            Some(access(&admin)),
-            json!({"role": "administrator"})
-        )
+    let reviewer: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE login = 'reviewer'")
+        .fetch_one(&db)
         .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
+        .unwrap();
+    let (status, renamed_admin) = call(
+        &app,
+        "PATCH",
+        &user(reviewer),
+        Some(access(&admin)),
+        json!({"name": "Revisora"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed_admin}");
+    for (method, path, body) in [
+        ("PATCH", user(admin_id), json!({"role": "technician"})),
+        ("POST", format!("{}/disable", user(admin_id)), Value::Null),
+        ("DELETE", user(admin_id), Value::Null),
+    ] {
+        let (status, body) = call(&app, method, &path, Some(access(&admin)), body).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {path}");
+        assert_eq!(body["code"], "SELF_CHANGE_BLOCKED");
+    }
+    let boss = create_account(&app, &admin, "chefe", "warehouse_clerk").await;
+    let (status, promoted) = call(
+        &app,
+        "PATCH",
+        &user(boss),
+        Some(access(&admin)),
+        json!({"role": "administrator"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{promoted}");
+    assert_eq!(promoted["role"], "administrator");
+    let (status, demoted) = call(
+        &app,
+        "PATCH",
+        &user(boss),
+        Some(access(&admin)),
+        json!({"role": "warehouse_clerk"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{demoted}");
     assert_eq!(
         call(
             &app,
@@ -2300,4 +2305,158 @@ async fn admin_edits_profile_role_and_reactivates_accounts(db: PgPool) {
     .await
     .unwrap();
     assert_eq!(enabled, 1);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn admin_deletes_accounts_preserving_history(db: PgPool) {
+    let (app, _permit) = fixture(&db).await;
+    let admin = login(&app, "admin").await;
+    let user = |id: Uuid| format!("/api/v1/admin/users/{id}");
+
+    // Conta sem vínculos: apagada de verdade, e o login fica livre.
+    let fresh = create_account(&app, &admin, "novato", "warehouse_clerk").await;
+    let session = login(&app, "novato").await;
+    let (status, result) = call(
+        &app,
+        "DELETE",
+        &user(fresh),
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["mode"], "removed");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/auth/refresh",
+            None,
+            refresh(&session)
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let gone: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = $1")
+        .bind(fresh)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(gone, 0);
+    create_account(&app, &admin, "novato", "technician").await;
+    assert_eq!(
+        call(
+            &app,
+            "DELETE",
+            &user(fresh),
+            Some(access(&admin)),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Técnico com captura pendente: bloqueado até resolver.
+    let tech = create_technician(&app, &admin, "tecnico").await;
+    let pending = capture(&db, tech, "pendente").await;
+    let (status, body) = call(
+        &app,
+        "DELETE",
+        &user(tech),
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "DELETE_BLOCKED");
+
+    // Com histórico e sem pendência: arquivada, some da lista e não entra mais.
+    let equipment = Uuid::new_v4();
+    sqlx::query("INSERT INTO equipment (id, warehouse_id) SELECT $1, id FROM locations LIMIT 1")
+        .bind(equipment)
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE captures SET equipment_id = $1, status = 'IDENTIFIED', validated_identifiers = '[]' WHERE id = $2")
+        .bind(equipment)
+        .bind(pending)
+        .execute(&db)
+        .await
+        .unwrap();
+    let (status, result) = call(
+        &app,
+        "DELETE",
+        &user(tech),
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["mode"], "archived");
+    let kept: (bool, bool) =
+        sqlx::query_as("SELECT active, deleted_at IS NOT NULL FROM users WHERE id = $1")
+            .bind(tech)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(kept, (false, true));
+    let (_, list) = call(
+        &app,
+        "GET",
+        "/api/v1/admin/users",
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert!(
+        list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["login"] != "tecnico"),
+        "{list}"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/v1/auth/login",
+            None,
+            json!({"login": "tecnico", "password": PASSWORD})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    for (method, path) in [
+        ("PATCH", user(tech)),
+        ("POST", format!("{}/enable", user(tech))),
+        ("DELETE", user(tech)),
+    ] {
+        let body = if method == "PATCH" {
+            json!({"name": "X"})
+        } else {
+            Value::Null
+        };
+        assert_eq!(
+            call(&app, method, &path, Some(access(&admin)), body)
+                .await
+                .0,
+            StatusCode::NOT_FOUND,
+            "{method} {path}"
+        );
+    }
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'USER_DELETED' AND entity_id = ANY($1)",
+    )
+    .bind(vec![fresh, tech])
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(audited, 2);
+
+    // Administrador pode criar outro administrador.
+    create_account(&app, &admin, "gestor", "administrator").await;
 }

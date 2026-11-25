@@ -52,6 +52,7 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
   const [loading, setLoading] = useState(false)
   const [listError, setListError] = useState('')
   const [managing, setManaging] = useState<ManagedUser>()
+  const [removed, setRemoved] = useState('')
 
   const fail = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) denied()
@@ -84,20 +85,21 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
         <button className="small-btn" disabled={loading} onClick={() => void load()}>Atualizar</button>
       </div>
       {listError && <p className="alert" role="alert">{listError}</p>}
+      {removed && <p className="success" role="status">{removed}</p>}
       {loading && !page && <p role="status" className="muted">Consultando usuários…</p>}
       <div className="card table-card">
         <table className="data-table">
           <thead><tr><th>Nome</th><th>Login</th><th>Perfil</th><th>WhatsApp</th><th>Situação</th><th /></tr></thead>
           <tbody>
             {page?.items.map((user) => <tr key={user.id} className={user.active ? '' : 'inactive'}>
-              <td><strong>{user.name}</strong></td>
+              <td><strong>{user.name}</strong>{user.id === owner && <span className="muted"> (você)</span>}</td>
               <td className="mono">{user.login}</td>
               <td>{roleLabels[user.role ?? 'technician']}</td>
               <td className="mono">{formatWhatsapp(user.whatsapp) || '—'}</td>
               <td><span className={'badge ' + (user.active ? 'badge-success' : 'badge-muted')}>{user.active ? 'Ativo' : 'Desativado'}</span></td>
               <td className="num"><div className="row-actions">
                 {user.role === 'technician' && <button className="small-btn" onClick={() => setSelected(user)}>Abrir técnico</button>}
-                {user.role !== 'administrator' && <button className="small-btn" onClick={() => setManaging(user)}>Gerenciar</button>}
+                <button className="small-btn" onClick={() => { setRemoved(''); setManaging(user) }}>Gerenciar</button>
               </div></td>
             </tr>)}
             {page?.items.length === 0 && <tr><td colSpan={6} className="empty-cell">Nenhum usuário cadastrado.</td></tr>}
@@ -107,6 +109,12 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
       {page?.next_cursor && <button disabled={loading} onClick={() => void load(page.next_cursor!)}>Carregar mais usuários</button>}
       {managing && <UserManager key={managing.id} owner={owner} user={managing} fail={fail}
         close={() => setManaging(undefined)}
+        deleted={(message) => {
+          const id = managing.id
+          setManaging(undefined)
+          setRemoved(message)
+          setPage((previous) => previous && { ...previous, items: previous.items.filter((item) => item.id !== id) })
+        }}
         changed={(user) => {
           setManaging(user)
           setPage((previous) => previous && { ...previous, items: previous.items.map((item) => item.id === user.id ? user : item) })
@@ -174,7 +182,7 @@ function UserRegistration({ owner, denied }: { owner: string; denied: () => void
           <label>Nome<input name="name" required maxLength={120} /></label>
           <label>Login<input name="login" required minLength={3} maxLength={64} pattern={String.raw`[A-Za-z0-9_.\x2d]{3,64}`} autoCapitalize="none" autoComplete="off" aria-describedby="login-format" /></label>
           <small id="login-format">Use letras sem acento, números, ponto, hífen ou sublinhado.</small>
-          <label>Perfil<select name="role"><option value="technician">Técnico</option><option value="warehouse_clerk">Estoquista</option></select></label>
+          <label>Perfil<select name="role"><option value="technician">Técnico</option><option value="warehouse_clerk">Estoquista</option><option value="administrator">Administrador</option></select></label>
           <label>WhatsApp<input name="whatsapp" type="tel" inputMode="tel" autoComplete="off" maxLength={24} placeholder="(11) 98765-4321" aria-describedby="whatsapp-format" /></label>
           <small id="whatsapp-format">Com DDD. O comprovante de devolução é enviado para este número, sem papel.</small>
           <label>Senha inicial<input name="password" type="password" required minLength={6} autoComplete="new-password" aria-describedby="password-format" /></label>
@@ -195,10 +203,11 @@ function generatedPassword() {
   return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('')
 }
 
-function UserManager({ owner, user, fail, close, changed }: {
+function UserManager({ owner, user, fail, close, changed, deleted }: {
   owner: string; user: ManagedUser; fail: (failure: unknown) => string
-  close: () => void; changed: (user: ManagedUser) => void
+  close: () => void; changed: (user: ManagedUser) => void; deleted: (message: string) => void
 }) {
+  const self = user.id === owner
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -208,6 +217,7 @@ function UserManager({ owner, user, fail, close, changed }: {
   const [password, setPassword] = useState('')
   const [revealed, setRevealed] = useState(false)
   const [confirmDisable, setConfirmDisable] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState('')
 
   async function run(work: () => Promise<string>) {
     if (busy) return
@@ -253,6 +263,22 @@ function UserManager({ owner, user, fail, close, changed }: {
     })
   }
 
+  async function remove() {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const result = await administrator<{ mode: 'removed' | 'archived' }>(owner, path, { method: 'DELETE' })
+      deleted(result.mode === 'removed'
+        ? 'Conta de ' + user.name + ' excluída. O login ' + user.login + ' está livre para um novo cadastro.'
+        : 'Conta de ' + user.name + ' excluída. O histórico de equipamentos e entregas foi mantido, e o login ' + user.login + ' fica reservado.')
+    } catch (failure) {
+      setError(fail(failure))
+      setBusy(false)
+    }
+  }
+
   function toggleActive() {
     void run(async () => {
       await administrator<void>(owner, path + (user.active ? '/disable' : '/enable'), { method: 'POST' })
@@ -280,10 +306,13 @@ function UserManager({ owner, user, fail, close, changed }: {
         <h3>Dados e permissões</h3>
         <fieldset className="user-fields" disabled={busy}>
           <label>Nome<input value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} /></label>
-          <label>Perfil<select value={role} onChange={(event) => setRole(event.target.value as typeof role)}>
+          <label>Perfil<select value={role} disabled={self} onChange={(event) => setRole(event.target.value as typeof role)}
+            aria-describedby={self ? 'manage-self-role' : undefined}>
             <option value="technician">Técnico</option>
             <option value="warehouse_clerk">Estoquista</option>
+            <option value="administrator">Administrador</option>
           </select></label>
+          {self && <small id="manage-self-role">Você não pode trocar o próprio perfil. Peça a outro administrador.</small>}
           <label>WhatsApp<input type="tel" inputMode="tel" autoComplete="off" maxLength={24} value={whatsapp}
             onChange={(event) => setWhatsapp(event.target.value)} placeholder="(11) 98765-4321" aria-describedby="manage-whatsapp" /></label>
           <small id="manage-whatsapp">Com DDD. Recebe o comprovante de devolução. Deixe vazio para remover.</small>
@@ -294,7 +323,9 @@ function UserManager({ owner, user, fail, close, changed }: {
 
       <form className="task-panel" onSubmit={reset}>
         <h3>Redefinir senha</h3>
-        <p className="muted">A nova senha passa a valer imediatamente e todas as sessões da pessoa são encerradas.</p>
+        <p className="muted">{self
+          ? 'A nova senha passa a valer imediatamente e todas as suas sessões são encerradas: você precisará entrar de novo.'
+          : 'A nova senha passa a valer imediatamente e todas as sessões da pessoa são encerradas.'}</p>
         <fieldset className="user-fields" disabled={busy}>
           <label>Nova senha<input type={revealed ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)}
             required minLength={6} autoComplete="new-password" aria-describedby="reset-format" /></label>
@@ -307,6 +338,10 @@ function UserManager({ owner, user, fail, close, changed }: {
         </fieldset>
       </form>
 
+      {self ? <div className="task-panel">
+        <h3>Acesso</h3>
+        <p className="muted">Esta é a sua conta. Para desativá-la ou excluí-la, peça a outro administrador.</p>
+      </div> : <>
       <div className="task-panel">
         <h3>Acesso</h3>
         {user.active
@@ -321,6 +356,21 @@ function UserManager({ owner, user, fail, close, changed }: {
           {!user.active && <button type="button" className="primary" disabled={busy} onClick={toggleActive}>Reativar conta</button>}
         </div>
       </div>
+
+      <form className="task-panel" onSubmit={(event) => { event.preventDefault(); if (confirmDelete.trim() === user.login) void remove() }}>
+        <h3>Excluir conta</h3>
+        <p className="muted">A conta deixa de existir e não pode ser recuperada. Se a pessoa já registrou coletas, entregas ou conferências,
+          esse histórico continua nos registros de equipamentos e o login fica reservado. Não é possível excluir quem ainda tem
+          equipamentos em posse, capturas sem identificação, lotes ou sessões de recebimento em aberto.</p>
+        <fieldset className="user-fields" disabled={busy}>
+          <label>Digite <strong className="mono">{user.login}</strong> para confirmar
+            <input className="mono" value={confirmDelete} autoCapitalize="none" autoComplete="off" spellCheck={false}
+              onChange={(event) => setConfirmDelete(event.target.value)} />
+          </label>
+          <button type="submit" className="danger-btn" disabled={confirmDelete.trim() !== user.login}>{busy ? 'Excluindo…' : 'Excluir conta'}</button>
+        </fieldset>
+      </form>
+      </>}
     </section>
   </div>
 }

@@ -112,7 +112,7 @@ pub async fn technicians(
     }
     let limit = limit(query.limit)? as usize;
     let mut users: Vec<(Uuid, String, String, i64)> = sqlx::query_as(
-        "SELECT id, name, login, (SELECT count(*) FROM equipment WHERE technician_id = users.id) AS pending_count FROM users WHERE role = 'technician'
+        "SELECT id, name, login, (SELECT count(*) FROM equipment WHERE technician_id = users.id) AS pending_count FROM users WHERE role = 'technician' AND deleted_at IS NULL
             AND ($2::uuid IS NULL OR id > $2)
             AND ($1 = '' OR strpos(lower(name), lower($1)) > 0 OR strpos(login, lower($1)) > 0)
          ORDER BY id LIMIT $3",

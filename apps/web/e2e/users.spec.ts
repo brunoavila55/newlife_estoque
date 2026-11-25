@@ -35,6 +35,9 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
       created = true
       return route.fulfill({ status: 201, json: technician })
     }
+    if (path.endsWith('/admin/users/tech') && request.method() === 'DELETE') {
+      return route.fulfill({ json: { mode: 'archived' } })
+    }
     if (path.endsWith('/admin/users/tech/inventory')) {
       return route.fulfill({ json: {
         items: [{ id: 'router', identifiers: [{ kind: 'SERIAL', raw_value: '0001-O', normalized_value: '0001-O' }] }],
@@ -87,4 +90,19 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
   await expect(page.getByText('Serial: 0001-O')).toHaveCount(0)
   await page.getByRole('button', { name: 'Voltar aos usuários' }).click()
   await expect(page.getByRole('heading', { name: 'Usuários cadastrados' })).toBeVisible()
+
+  // A própria conta não oferece desativar nem excluir.
+  await page.getByRole('row', { name: /Administração/ }).getByRole('button', { name: 'Gerenciar' }).click()
+  await expect(page.getByText('Esta é a sua conta.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Excluir conta' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Fechar' }).click()
+
+  // Exclusão exige digitar o login.
+  await page.getByRole('row', { name: /Técnica de campo/ }).getByRole('button', { name: 'Gerenciar' }).click()
+  const remove = page.getByRole('button', { name: 'Excluir conta' })
+  await expect(remove).toBeDisabled()
+  await page.getByLabel(/para confirmar/).fill(technician.login)
+  await remove.click()
+  await expect(page.getByText(/Conta de Técnica de campo excluída\. O histórico/)).toBeVisible()
+  await expect(page.getByRole('row', { name: /Técnica de campo/ })).toHaveCount(0)
 })

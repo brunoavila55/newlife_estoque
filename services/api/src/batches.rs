@@ -463,7 +463,7 @@ pub async fn technicians_summary(
                 AND b.status IN ('SUBMITTED', 'RECEIVING')) AS open_batches,
             (SELECT min(c.captured_at_device) FROM captures c LEFT JOIN equipment e ON e.id = c.equipment_id
               WHERE c.technician_id = u.id AND (c.equipment_id IS NULL OR e.technician_id = u.id)) AS oldest_pending_at
-         FROM users u WHERE u.role = 'technician'
+         FROM users u WHERE u.role = 'technician' AND u.deleted_at IS NULL
            AND ($1 = '' OR strpos(lower(u.name), lower($1)) > 0 OR strpos(u.login, lower($1)) > 0)
          ORDER BY u.active DESC, lower(u.name), u.id LIMIT 200",
     )
