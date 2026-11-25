@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { registerSW } from 'virtual:pwa-register'
@@ -22,7 +22,9 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : 'Não foi possível concluir a operação.'
 }
 
-function Login({ reauthenticate, connected, done }: { connected: boolean; reauthenticate: boolean; done: (user: User) => void }) {
+function Login({ reauthenticate, connected, done, children }: {
+  connected: boolean; reauthenticate: boolean; done: (user: User) => void; children?: ReactNode
+}) {
   const [loginInput, setLoginInput] = useState('')
   const [passwordInput, setPasswordInput] = useState('')
   const [notice, setNotice] = useState('')
@@ -47,65 +49,48 @@ function Login({ reauthenticate, connected, done }: { connected: boolean; reauth
   }
 
   return (
-    <>
-      <header className="access-header">
-        <div className="access-brand"><img src="/icons/new-life-logo.png" alt="New Life" /><span>Portal de operações</span></div>
-        <span className="connection" data-online={connected}>{connected ? 'Online' : 'Offline'}</span>
-      </header>
-      <section className="login">
-        <div className="field-poster">
-          <div className="poster-title"><Icon name="scan" /><h2>Controle de<br />equipamentos</h2></div>
-          <div className="bench-photo" role="img" aria-label="Roteador com etiqueta de identificação e cabo de rede na bancada" />
-          <div className="poster-route"><span>Coleta</span><i /><span>Conferência</span><i /><span>Estoque</span></div>
+    <div className="auth">
+      <aside className="auth-brand" aria-hidden="true">
+        <span className="auth-logo"><img src="/icons/new-life-logo.png" alt="" /></span>
+        <div className="auth-copy">
+          <h1>Recolhimento e devolução de equipamentos</h1>
+          <p>Cada roteador recolhido em campo, rastreado do celular do técnico até o estoque.</p>
         </div>
-      <div className="login-panel">
-        <div className="access-symbol"><Icon name="box" /></div>
-        <h1>{reauthenticate ? 'Entre novamente' : 'Acesse sua conta'}</h1>
-        <p>
-          {reauthenticate
-            ? 'As coletas e fotos salvas ficam vinculadas à conta que as registrou.'
-            : 'Entre com as credenciais da sua unidade.'}
-        </p>
-
-        <form onSubmit={(event) => void submit(event)}>
-          <label>
-            Login
-            <input
-              name="login"
-              placeholder="Seu login"
-              value={loginInput}
-              onChange={(e) => setLoginInput(e.target.value)}
-              autoComplete="username"
-              autoCapitalize="none"
-              required
-            />
-          </label>
-          <label>
-            Senha
-            <input
-              name="password"
-              placeholder="Sua senha"
-              type="password"
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          <button className="primary" disabled={busy}>
-            {busy ? 'Entrando…' : 'Entrar no Sistema'} <Icon name="next" />
-          </button>
-        </form>
-
-        {notice && (
-          <p className="alert" role="alert">
-            {notice}
-          </p>
-        )}
-
-      </div>
-    </section>
-    </>
+        <ol className="auth-steps">
+          <li><Icon name="camera" /><strong>Coleta</strong><span>O técnico fotografa a etiqueta, mesmo sem internet.</span></li>
+          <li><Icon name="box" /><strong>Lote</strong><span>Separa o que vai entregar e informa o número no balcão.</span></li>
+          <li><Icon name="scan" /><strong>Conferência</strong><span>O estoque bipa cada equipamento e emite o comprovante.</span></li>
+        </ol>
+        <p className="auth-footnote">Portal de operações · New Life</p>
+      </aside>
+      <section className="auth-panel">
+        <div className="auth-form-wrap">
+          <header>
+            <img className="auth-mobile-logo" src="/icons/new-life-logo.png" alt="New Life" />
+            <span className="connection" data-online={connected}>{connected ? 'Conectado' : 'Sem conexão'}</span>
+            <h2>{reauthenticate ? 'Entre novamente' : 'Entrar'}</h2>
+            <p>{reauthenticate
+              ? 'As fotos salvas neste aparelho continuam vinculadas à conta que as registrou.'
+              : 'Use o login e a senha fornecidos pela sua unidade.'}</p>
+          </header>
+          <form onSubmit={(event) => void submit(event)}>
+            <label>
+              Login
+              <input name="login" value={loginInput} onChange={(e) => setLoginInput(e.target.value)}
+                autoComplete="username" autoCapitalize="none" spellCheck={false} required />
+            </label>
+            <label>
+              Senha
+              <input name="password" type="password" value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)} autoComplete="current-password" required />
+            </label>
+            <button className="primary" disabled={busy}>{busy ? 'Entrando…' : 'Entrar'}</button>
+          </form>
+          {notice && <p className="alert" role="alert">{notice}</p>}
+        </div>
+        {children}
+      </section>
+    </div>
   )
 }
 
@@ -269,7 +254,7 @@ function App() {
   if (profile === undefined || restoringStaff) {
     return (
       <div className="app-loading-screen">
-        <p>Carregando sistema New Life…</p>
+        <p>Carregando…</p>
       </div>
     )
   }
@@ -290,15 +275,16 @@ function App() {
               setClock(Date.now())
               setAuthDenied(false)
             }}
-          />
-          {!standalone && install && (
-            <button className="install" onClick={() => { void install.prompt(); setInstall(undefined) }}>
-              Instalar aplicativo no dispositivo
-            </button>
-          )}
-          {!standalone && appleMobile && (
-            <p className="muted install">No Safari, toque em Compartilhar e em Adicionar à Tela de Início.</p>
-          )}
+          >
+            {!standalone && install && (
+              <button className="install" onClick={() => { void install.prompt(); setInstall(undefined) }}>
+                Instalar aplicativo neste aparelho
+              </button>
+            )}
+            {!standalone && appleMobile && (
+              <p className="install">No iPhone, toque em Compartilhar e em Adicionar à Tela de Início.</p>
+            )}
+          </Login>
         </main>
       </>
     )

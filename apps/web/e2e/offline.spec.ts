@@ -13,7 +13,7 @@ const photo = {
 async function signIn(page: Page, login = technician.login) {
   await page.getByLabel('Login').fill(login)
   await page.getByLabel('Senha').fill('senha-de-teste-local')
-  await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
+  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Coletar' })).toBeVisible()
 }
 
@@ -287,7 +287,7 @@ test('preserva a foto pendente depois de atualizar o Service Worker', async ({ p
     await page.goto('http://127.0.0.1:' + (server.address() as AddressInfo).port)
     await page.getByLabel('Login').fill(technician.login)
     await page.getByLabel('Senha').fill('senha-de-teste-local')
-    await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
+    await page.getByRole('button', { name: 'Entrar', exact: true }).click()
     await page.evaluate(async () => { await navigator.serviceWorker.ready })
     if (!await page.evaluate(() => Boolean(navigator.serviceWorker.controller))) await page.reload()
     await context.setOffline(true)
@@ -369,7 +369,7 @@ test('revisa o OCR com foto e confirma a correção feita pelo administrador', a
   await page.goto('/')
   await page.getByLabel('Login').fill('admin')
   await page.getByLabel('Senha').fill('senha-de-teste-local')
-  await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
+  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
   await page.getByRole('button', { name: /Revisão de fotos/ }).click()
   await page.getByRole('button', { name: 'Abrir captura' }).click()
   await expect(page.getByRole('img', { name: 'Foto da etiqueta enviada pelo técnico' })).toBeVisible()
@@ -451,7 +451,7 @@ test('sincroniza o código, a OS e a observação da coleta', async ({ page, con
   await page.goto('/')
   await page.getByLabel('Login').fill(technician.login)
   await page.getByLabel('Senha').fill('senha-de-teste-local')
-  await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
+  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
   await page.locator('input[type=file]:not([capture])').setInputFiles(photo)
   await page.getByLabel(/Código da etiqueta/).fill('0001')
   await page.getByLabel(/Ordem de serviço/).fill('OS-10492')

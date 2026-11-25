@@ -8,7 +8,7 @@ async function signIn(page: Page) {
   await page.goto('/')
   await page.getByLabel('Login').fill(clerk.login)
   await page.getByLabel('Senha').fill('senha-de-teste-local')
-  await page.getByRole('button', { name: 'Entrar no Sistema', exact: true }).click()
+  await page.getByRole('button', { name: 'Entrar', exact: true }).click()
 }
 
 test('confere um lote com o leitor: bipe, Enter confirma, inclusão, identificação pela foto e comprovante', async ({ page, context }) => {
@@ -204,8 +204,8 @@ test('preserva a sessão diante de falta de permissão e consulta o código da b
   await menu.getByRole('button', { name: 'Comprovantes' }).click()
   await expect(page.getByText('Nenhuma conferência registrada.')).toBeVisible()
   await page.getByRole('button', { name: 'Sair', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'Entrar no Sistema' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Entrar', exact: true })).toBeVisible()
   await page.reload()
-  await expect(page.getByRole('button', { name: 'Entrar no Sistema' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Entrar', exact: true })).toBeVisible()
   expect(refreshes).toBe(1)
 })

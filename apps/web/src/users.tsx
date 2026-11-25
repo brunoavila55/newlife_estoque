@@ -20,27 +20,23 @@ function errorMessage(error: unknown) {
   return error instanceof ApiError ? error.message : 'Não foi possível conectar ao servidor. Tente novamente.'
 }
 
-export function AdminDesk({ admin, denied, exit }: {
-  admin: User; denied: () => void; exit: () => Promise<void>
+export function AdminDesk({ admin, denied }: {
+  admin: User; denied: () => void; exit?: () => Promise<void>
 }) {
-  const [tab, setTab] = useState<'users' | 'settings' | 'review'>('users')
-  const [error, setError] = useState('')
-  return <>
-    <div className="workspace-head">
+  const [tab, setTab] = useState<'users' | 'create'>('users')
+  return <div className="module-container">
+    <div className="section-head">
       <div>
-        <h1>{tab === 'users' ? 'Usuários' : tab === 'settings' ? 'Configurações' : 'Revisão de etiquetas'}</h1>
-        <p className="workspace-account">{admin.name}</p>
+        <h1>Usuários e permissões</h1>
+        <p>Contas de técnicos, estoquistas e administradores.</p>
       </div>
-      <button onClick={() => void exit().catch((failure) => setError(errorMessage(failure)))}>Sair</button>
     </div>
     <nav aria-label="Área administrativa" className="tabs">
       <button aria-current={tab === 'users' ? 'page' : undefined} onClick={() => setTab('users')}>Usuários</button>
-      <button aria-current={tab === 'review' ? 'page' : undefined} onClick={() => setTab('review')}>Revisão de etiquetas</button>
-      <button aria-current={tab === 'settings' ? 'page' : undefined} onClick={() => setTab('settings')}>Configurações</button>
+      <button aria-current={tab === 'create' ? 'page' : undefined} onClick={() => setTab('create')}>Novo usuário</button>
     </nav>
-    {error && <p className="alert" role="alert">{error}</p>}
-    {tab === 'users' ? <UsersPanel owner={admin.id} denied={denied} /> : tab === 'settings' ? <UserRegistration owner={admin.id} denied={denied} /> : <ReviewDesk admin={admin} denied={denied} />}
-  </>
+    {tab === 'users' ? <UsersPanel owner={admin.id} denied={denied} /> : <UserRegistration owner={admin.id} denied={denied} />}
+  </div>
 }
 
 function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
@@ -75,23 +71,27 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
   }
 
   return (
-    <section className="card work-list">
+    <section className="work-list">
       <div className="section-head"><h2>Usuários cadastrados</h2>
-        <button disabled={loading} onClick={() => void load()}>Atualizar lista</button>
+        <button className="small-btn" disabled={loading} onClick={() => void load()}>Atualizar</button>
       </div>
       {listError && <p className="alert" role="alert">{listError}</p>}
-      {loading && <p role="status">Consultando usuários…</p>}
-      {page?.items.length === 0 && <p>Nenhum usuário cadastrado.</p>}
-      {!!page?.items.length && <ul className="items">{page.items.map((user) =>
-        <li key={user.id}>
-          <div className="queue-row">
-            <div><strong>{user.name}</strong><br />
-              <span className="muted">{user.login} · {roleLabels[user.role ?? 'technician']} · {user.active ? 'Ativo' : 'Desativado'}</span>
-            </div>
-            {user.role === 'technician' && <button onClick={() => setSelected(user)}>Abrir técnico</button>}
-          </div>
-        </li>
-      )}</ul>}
+      {loading && !page && <p role="status" className="muted">Consultando usuários…</p>}
+      <div className="card table-card">
+        <table className="data-table">
+          <thead><tr><th>Nome</th><th>Login</th><th>Perfil</th><th>Situação</th><th /></tr></thead>
+          <tbody>
+            {page?.items.map((user) => <tr key={user.id} className={user.active ? '' : 'inactive'}>
+              <td><strong>{user.name}</strong></td>
+              <td className="mono">{user.login}</td>
+              <td>{roleLabels[user.role ?? 'technician']}</td>
+              <td><span className={'badge ' + (user.active ? 'badge-success' : 'badge-muted')}>{user.active ? 'Ativo' : 'Desativado'}</span></td>
+              <td className="num">{user.role === 'technician' && <button className="small-btn" onClick={() => setSelected(user)}>Abrir técnico</button>}</td>
+            </tr>)}
+            {page?.items.length === 0 && <tr><td colSpan={5} className="empty-cell">Nenhum usuário cadastrado.</td></tr>}
+          </tbody>
+        </table>
+      </div>
       {page?.next_cursor && <button disabled={loading} onClick={() => void load(page.next_cursor!)}>Carregar mais usuários</button>}
     </section>
   )
@@ -103,8 +103,8 @@ function TechnicianProfile({ technician, owner, denied, back }: {
   const [tab, setTab] = useState<'inventory' | 'deliveries'>('inventory')
   return <section className="module-container">
     <div className="section-head">
-      <div><h2>{technician.name}</h2><p className="muted">{technician.login}</p></div>
-      <button onClick={back}>Voltar aos usuários</button>
+      <div><button className="small-btn" onClick={back}>← Voltar aos usuários</button>
+        <h2>{technician.name}</h2><p className="mono">{technician.login}</p></div>
     </div>
     <nav aria-label="Perfil do técnico" className="tabs">
       <button aria-current={tab === 'inventory' ? 'page' : undefined} onClick={() => setTab('inventory')}>Em posse</button>
@@ -148,7 +148,8 @@ function UserRegistration({ owner, denied }: { owner: string; denied: () => void
 
   return (
     <section className="card task-panel">
-      <h2>Criar usuário</h2>
+      <h2>Novo usuário</h2>
+      <p className="muted">Entregue a senha inicial à pessoa por um canal seguro.</p>
       <form onSubmit={(event) => void create(event)}>
         <fieldset className="user-fields" disabled={saving}>
           <label>Nome<input name="name" required maxLength={120} /></label>

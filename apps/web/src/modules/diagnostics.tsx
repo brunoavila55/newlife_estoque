@@ -108,33 +108,32 @@ export function DiagnosticsModule() {
               checked={audioEnabled}
               onChange={(e) => setAudioEnabled(e.target.checked)}
             />
-            <span>Feedback Sonoro Ativo (Web Audio API)</span>
+            <span>Som de confirmação</span>
           </label>
-          <button onClick={() => setHistory([])}>Limpar Histórico de Teste</button>
+          <button className="small-btn" onClick={() => setHistory([])}>Limpar leituras</button>
         </div>
       </div>
 
       <div className="desk-grid">
         <section className="card diagnostic-card">
           <div className="card-header">
-            <h3>Área de Captura do Leitor</h3>
-            <span className="badge badge-success">● Pronto para Bipar</span>
+            <h3>Leitura</h3>
+            <span className="badge badge-success">Pronto</span>
           </div>
 
           <p className="muted">
-            Conecte o leitor à porta USB ou emparelhe via Bluetooth. Posicione o feixe no código de barras da etiqueta
-            e acione o gatilho.
+            Conecte o leitor por USB ou Bluetooth no modo teclado e bipe qualquer etiqueta.
           </p>
 
           <div className="scanner-input-box">
             <label>
-              <strong>Campo de Leitura Contínua</strong>
+              Código lido
               <input
                 ref={inputRef}
                 type="text"
                 autoComplete="off"
                 spellCheck="false"
-                placeholder="Aponte o leitor e bipe aqui..."
+                placeholder="Bipe aqui"
                 value={currentBuffer}
                 onChange={(e) => handleInputChange(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -142,48 +141,47 @@ export function DiagnosticsModule() {
               />
             </label>
             <small className="muted">
-              Pressione Enter ou aguarde o leitor enviar o terminador automático.
+              O leitor deve enviar Enter ou Tab ao final do código.
             </small>
           </div>
 
           <div className="diagnostic-summary-grid">
             <div className="summary-box">
-              <span className="label">Última Cadência</span>
+              <span className="label">Velocidade</span>
               <strong className="value">
                 {cadence !== null ? `${Math.round(cadence)} ms/char` : '—'}
               </strong>
               <small className="muted">
                 {cadence !== null
                   ? cadence < 35
-                    ? 'Scanner Óptico (Alta Velocidade)'
-                    : 'Digitação Manual Detectada'
-                  : 'Aguardando bipe'}
+                    ? 'Leitor de código de barras'
+                    : 'Digitação manual'
+                  : 'Aguardando leitura'}
               </small>
             </div>
 
             <div className="summary-box">
-              <span className="label">Status de Homologação</span>
-              <strong className="value text-success">Compatível</strong>
-              <small className="muted">Sufixo Enter e Tab suportados</small>
+              <span className="label">Sufixo detectado</span>
+              <strong className="value">{history[0] ? (history[0].terminator === 'ENTER' ? 'Enter' : history[0].terminator === 'TAB' ? 'Tab' : 'Nenhum') : '—'}</strong>
+              <small className="muted">A mesa de conferência aceita Enter ou Tab</small>
             </div>
           </div>
 
           <div className="callout-box">
-            <strong>Instrução para Leitores Zebra / Honeywell / Elgin:</strong>
+            <strong>Configuração recomendada</strong>
             <p>
-              Recomendamos configurar o leitor com sufixo <code>Enter</code> (Carriage Return). Desta forma o sistema
-              processa o bipe instantaneamente sem necessidade de clicar na tela.
+              Configure o leitor com sufixo <kbd>Enter</kbd>. Assim cada bipe é processado sem clicar na tela.
             </p>
           </div>
         </section>
 
         <section className="card history-card">
-          <h3>Bipes Registrados na Sessão ({history.length})</h3>
-          <p className="muted">Registros temporários para conferência visual do formato detectado:</p>
+          <h3>Leituras <span className="count">{history.length}</span></h3>
+          <p className="muted small-text">Nada é gravado no sistema. As leituras somem ao sair desta tela.</p>
 
           {history.length === 0 ? (
             <div className="empty-state">
-              Nenhum bipe registrado nesta sessão de teste. Posicione o leitor na etiqueta e acione o gatilho.
+              Nenhuma leitura ainda.
             </div>
           ) : (
             <ul className="diagnostic-list">
@@ -196,11 +194,11 @@ export function DiagnosticsModule() {
                   <div className="diag-tags">
                     <span className="badge badge-info">{item.detected_symbology}</span>
                     <span className={`badge ${item.is_hardware_scanner ? 'badge-success' : 'badge-muted'}`}>
-                      {item.is_hardware_scanner ? 'Leitor HID' : 'Teclado Manual'} ({item.keystroke_cadence_ms}ms)
+                      {item.is_hardware_scanner ? 'Leitor' : 'Digitação'} · {item.keystroke_cadence_ms} ms
                     </span>
                     <span className="badge badge-purple">Sufixo: {item.terminator}</span>
-                    {item.mac_valid && <span className="badge badge-success">Formato MAC Válido</span>}
-                    {item.serial_valid && <span className="badge badge-success">Formato Serial Válido</span>}
+                    {item.mac_valid && <span className="badge badge-success">MAC válido</span>}
+                    {item.serial_valid && <span className="badge badge-success">Serial válido</span>}
                   </div>
                 </li>
               ))}

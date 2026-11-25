@@ -103,25 +103,34 @@ export function ReviewDesk({ admin, denied }: { admin: User; denied: () => void 
 
   useEffect(() => { void load() }, [load])
 
-  return <>
+  return <div className="module-container">
+    <div className="section-head">
+      <div>
+        <h1>Revisão de fotos</h1>
+        <p>Fotos em que a leitura automática da etiqueta precisa de conferência humana.</p>
+      </div>
+    </div>
     {error && <p className="alert" role="alert">{error}</p>}
     <section className="card work-list">
       <div className="section-head review-filters">
-        <label>Capturas <select value={filter} onChange={(event) => { setPage(undefined); setFilter(event.target.value) }}>
+        <label>Mostrar <select value={filter} onChange={(event) => { setPage(undefined); setFilter(event.target.value) }}>
           <option value="pending">Pendentes</option><option value="NEEDS_REVIEW">Em revisão</option>
           <option value="OCR_FAILED">Falha no OCR</option><option value="IDENTIFIED">Validadas</option><option value="all">Todas</option>
         </select></label>
-        <button disabled={busy} onClick={() => void load()}>Atualizar lista</button>
+        <button className="small-btn" disabled={busy} onClick={() => void load()}>Atualizar</button>
       </div>
-      <form className="receipt-form" onSubmit={event => {
-        event.preventDefault()
-        setSelection(String(new FormData(event.currentTarget).get('capture')).trim())
-      }}>
-        <label>Referência da coleta no balcão<input name="capture" required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" /></label>
-        <button>Abrir pela referência</button>
-      </form>
+      <details>
+        <summary>Abrir uma foto pela referência</summary>
+        <form className="receipt-form" onSubmit={event => {
+          event.preventDefault()
+          setSelection(String(new FormData(event.currentTarget).get('capture')).trim())
+        }}>
+          <label>Referência da coleta<input name="capture" className="mono" required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" /></label>
+          <button>Abrir</button>
+        </form>
+      </details>
       {busy && !page && <p role="status">Consultando capturas…</p>}
-      {page?.items.length === 0 && <p>Nenhuma captura neste filtro.</p>}
+      {page?.items.length === 0 && <p className="empty-state">Nenhuma foto neste filtro.</p>}
       {!!page?.items.length && <ul className="items">{page.items.map((capture) =>
         <li key={capture.id} className="queue-row">
           <div><strong>{capture.technician_name}</strong><br />
@@ -129,14 +138,14 @@ export function ReviewDesk({ admin, denied }: { admin: User; denied: () => void 
             <time dateTime={capture.received_at_server}>{dateTime.format(new Date(capture.received_at_server))}</time>
             {capture.review_issue && <p className="alert">{issues[capture.review_issue.code] ?? capture.review_issue.code}</p>}
           </div>
-          <button aria-expanded={selection === capture.id} onClick={() => setSelection(capture.id)}>Abrir captura</button>
+          <button className="small-btn" aria-expanded={selection === capture.id} onClick={() => setSelection(capture.id)}>Abrir captura</button>
         </li>
       )}</ul>}
       {page?.next_cursor && <button disabled={busy} onClick={() => void load(page.next_cursor!)}>Carregar mais</button>}
     </section>
     {selection && <ReviewCapture key={selection} owner={admin.id} id={selection} fail={fail}
       changed={() => void load()} close={() => setSelection(undefined)} />}
-  </>
+  </div>
 }
 
 function ReviewCapture({ owner, id, fail, changed, close }: {

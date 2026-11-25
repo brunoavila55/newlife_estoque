@@ -8,6 +8,7 @@ import {
 
 function age(iso: string): string {
   const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000))
+  if (minutes < 1) return 'agora'
   if (minutes < 60) return 'há ' + minutes + ' min'
   const hours = Math.round(minutes / 60)
   return hours < 24 ? 'há ' + hours + ' h' : 'há ' + Math.round(hours / 24) + ' dias'
