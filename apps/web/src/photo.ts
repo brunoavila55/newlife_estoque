@@ -42,7 +42,21 @@ export async function preparePhoto(file: File): Promise<Blob> {
 
 type DetectedCode = { rawValue: string }
 type Detector = new () => { detect(image: ImageBitmapSource): Promise<DetectedCode[]> }
+type ZxingReader = { decodeFromCanvas(canvas: HTMLCanvasElement): { getText(): string } }
 
+let zxing: Promise<ZxingReader> | undefined
+
+/** Um único leitor ZXing com TRY_HARDER: mais lento por quadro, mas lê etiquetas pequenas e inclinadas. */
+function zxingReader(): Promise<ZxingReader> {
+  zxing ??= Promise.all([import('@zxing/browser'), import('@zxing/library')]).then(([browser, library]) =>
+    new browser.BrowserMultiFormatReader(new Map([[library.DecodeHintType.TRY_HARDER, true]])))
+  return zxing
+}
+
+/**
+ * Lê um código de barras do quadro. Se o leitor nativo encontrar mais de um código,
+ * não escolhe nenhum: a etiqueta tem SN e MAC e o primeiro não é necessariamente o serial.
+ */
 export async function readFrame(canvas: HTMLCanvasElement): Promise<import('./db').BarcodeEvidence | undefined> {
   const NativeDetector = (window as Window & { BarcodeDetector?: Detector }).BarcodeDetector
   if (NativeDetector) {
@@ -55,8 +69,7 @@ export async function readFrame(canvas: HTMLCanvasElement): Promise<import('./db
     } catch { /* Alguns navegadores expõem a API sem implementar a leitura. */ }
   }
   try {
-    const { BrowserMultiFormatReader } = await import('@zxing/browser')
-    const raw = new BrowserMultiFormatReader().decodeFromCanvas(canvas).getText()
+    const raw = (await zxingReader()).decodeFromCanvas(canvas).getText()
     if (validBarcode(raw)) return { raw_value: raw, source: 'ZXING' }
   } catch { /* Quadro sem leitura. */ }
 }

@@ -252,11 +252,39 @@ test('lê pela câmera, confirma a foto offline e libera o dispositivo', async (
   await page.getByRole('button', { name: 'Disparar Foto' }).click()
   await page.getByRole('button', { name: 'Usar esta foto' }).click()
   await expect(page.getByLabel(/Código da etiqueta/)).toHaveValue('SN-00042')
-  await expect(page.getByText('Código lido na foto. Confira antes de salvar.')).toBeVisible()
+  await expect(page.getByText('Código lido pela câmera. Confira antes de salvar.')).toBeVisible()
   await expect.poll(() => track.evaluate(t => t.readyState)).toBe('ended')
   await page.getByRole('button', { name: 'Salvar e parar' }).click()
   await expectPending(page, 1)
   await expect(page.getByText('SN-00042', { exact: true })).toBeVisible()
+})
+
+test('lê só o código de barras pela câmera e preenche o campo', async ({ page, context }) => {
+  await context.addInitScript(() => {
+    Object.defineProperty(window, 'BarcodeDetector', { configurable: true, value: class {
+      async detect() { return [{ rawValue: 'MAC-AABBCC' }] }
+    } })
+    navigator.mediaDevices.getUserMedia = async () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 640
+      canvas.height = 480
+      const stream = canvas.captureStream(5)
+      const timer = setInterval(() => {
+        if (stream.active) canvas.getContext('2d')!.fillRect(0, 0, 640, 480)
+        else clearInterval(timer)
+      }, 150)
+      return stream
+    }
+  })
+  await context.route('**/api/v1/auth/web/**', route =>
+    route.fulfill({ json: { access_token: 'mock', expires_in: 3600, user: technician } }))
+  await page.goto('/')
+  await signIn(page)
+  await technicianNav(page, 'Coletar').click()
+  await page.locator('input[type=file]:not([capture])').setInputFiles(photo)
+  await page.getByRole('button', { name: 'Ler código de barras com a câmera' }).click()
+  await expect(page.getByLabel(/Código da etiqueta/)).toHaveValue('MAC-AABBCC')
+  await expect(page.locator('video')).toHaveCount(0)
 })
 
 test('preserva a foto pendente depois de atualizar o Service Worker', async ({ page, context }) => {

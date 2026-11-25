@@ -18,6 +18,7 @@ export function CaptureTab({ owner, saved, savedToday }: {
   const [serviceOrder, setServiceOrder] = useState('')
   const [notes, setNotes] = useState('')
   const [liveCamera, setLiveCamera] = useState(false)
+  const [scanner, setScanner] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [done, setDone] = useState('')
@@ -89,13 +90,28 @@ export function CaptureTab({ owner, saved, savedToday }: {
       onChange={(event) => { choose(event.target.files?.[0]); event.target.value = '' }} />
   </>
 
+  if (scanner) {
+    return <div className="tech-view">
+      <LabelCamera
+        mode="scan"
+        close={() => setScanner(false)}
+        save={async (_photo, detected) => {
+          if (!detected) return false
+          setEvidence(detected)
+          setCode(detected.raw_value)
+          return true
+        }}
+      />
+    </div>
+  }
+
   if (liveCamera) {
     return <div className="tech-view">
       <LabelCamera
         close={() => setLiveCamera(false)}
         fallback={() => { setLiveCamera(false); cameraInput.current?.click() }}
         pickFromGallery={() => { setLiveCamera(false); galleryInput.current?.click() }}
-        save={async (photo, detected) => { choose(photo, detected); return true }}
+        save={async (photo, detected) => { if (!photo) return false; choose(photo, detected); return true }}
       />
       {inputs}
     </div>
@@ -130,11 +146,16 @@ export function CaptureTab({ owner, saved, savedToday }: {
     </header>
     <img src={preview} alt="Etiqueta fotografada" className="tech-preview" />
     <form className="tech-form" onSubmit={(event) => { event.preventDefault(); void save(true) }}>
-      <label>Código da etiqueta <span className="muted">(opcional)</span>
-        <input className="mono" value={code} maxLength={128} autoCapitalize="characters" spellCheck={false}
-          placeholder="Serial ou MAC" onChange={(event) => setCode(event.target.value)} />
-      </label>
-      {evidence && code === evidence.raw_value && <p className="muted small-text">Código lido na foto. Confira antes de salvar.</p>}
+      <div className="tech-code-field">
+        <label>Código da etiqueta <span className="muted">(opcional)</span>
+          <input className="mono" value={code} maxLength={128} autoCapitalize="characters" spellCheck={false}
+            placeholder="Serial ou MAC" onChange={(event) => setCode(event.target.value)} />
+        </label>
+        {typeof navigator.mediaDevices?.getUserMedia === 'function' &&
+          <button type="button" className="small-btn" disabled={saving} onClick={() => setScanner(true)}
+            aria-label="Ler código de barras com a câmera"><Icon name="scan" /> Ler</button>}
+      </div>
+      {evidence && code === evidence.raw_value && <p className="muted small-text">Código lido pela câmera. Confira antes de salvar.</p>}
       <label>Ordem de serviço <span className="muted">(opcional)</span>
         <input value={serviceOrder} maxLength={160} placeholder="Mantida para as próximas fotos"
           onChange={(event) => setServiceOrder(event.target.value)} />
