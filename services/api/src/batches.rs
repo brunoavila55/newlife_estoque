@@ -21,7 +21,8 @@ use crate::{
     auth::{Role, audit, authorize, parse_id},
     custody::require_technician,
     error::{ApiError, Body},
-    receipts::{self, authorize_receive, checked_query, conflict, limit},
+    locations::{Scope, require_local_technician, warehouse_scope},
+    receipts::{self, checked_query, conflict, limit},
 };
 
 const MAX_BATCH_ITEMS: usize = 200;
@@ -156,6 +157,7 @@ pub struct ListQuery {
 async fn list_batches(
     db: &mut PgConnection,
     technician: Option<Uuid>,
+    location: Option<Uuid>,
     query: ListQuery,
 ) -> Result<Value, ApiError> {
     let limit = limit(query.limit)?;
@@ -169,12 +171,14 @@ async fn list_batches(
         "{SUMMARY} WHERE b.status = ANY($1) AND ($2::uuid IS NULL OR b.technician_id = $2)
            AND ($3::uuid IS NULL OR (b.created_at, b.id) <
                (SELECT created_at, id FROM delivery_batches WHERE id = $3))
+           AND ($5::uuid IS NULL OR b.technician_id IN (SELECT id FROM users WHERE location_id = $5))
          ORDER BY b.created_at DESC, b.id DESC LIMIT $4"
     ))
     .bind(statuses)
     .bind(technician.or(query.technician_id))
     .bind(query.after)
     .bind(limit + 1)
+    .bind(location)
     .fetch_all(db)
     .await?;
     let more = rows.len() > limit as usize;
@@ -203,7 +207,7 @@ pub async fn my_batches(
     query: Result<Query<ListQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let (mut tx, technician) = authorize(&state.db, &headers, Role::Technician).await?;
-    let page = list_batches(&mut tx, Some(technician), checked_query(query)?).await?;
+    let page = list_batches(&mut tx, Some(technician), None, checked_query(query)?).await?;
     tx.commit().await?;
     Ok(Json(page))
 }
@@ -449,7 +453,7 @@ pub async fn technicians_summary(
     headers: HeaderMap,
     query: Result<Query<TechnicianQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, _) = authorize_receive(&state, &headers).await?;
+    let (mut tx, scope) = warehouse_scope(&state, &headers).await?;
     let query = checked_query(query)?;
     let search = query.search.as_deref().unwrap_or_default().trim();
     if search.len() > 120 || search.chars().any(char::is_control) {
@@ -463,11 +467,12 @@ pub async fn technicians_summary(
                 AND b.status IN ('SUBMITTED', 'RECEIVING')) AS open_batches,
             (SELECT min(c.captured_at_device) FROM captures c LEFT JOIN equipment e ON e.id = c.equipment_id
               WHERE c.technician_id = u.id AND (c.equipment_id IS NULL OR e.technician_id = u.id)) AS oldest_pending_at
-         FROM users u WHERE u.role = 'technician' AND u.deleted_at IS NULL
+         FROM users u WHERE u.role = 'technician' AND u.deleted_at IS NULL AND u.location_id = $2
            AND ($1 = '' OR strpos(lower(u.name), lower($1)) > 0 OR strpos(u.login, lower($1)) > 0)
          ORDER BY u.active DESC, lower(u.name), u.id LIMIT 200",
     )
     .bind(search)
+    .bind(scope.location)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -479,9 +484,10 @@ pub async fn technician_custody(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, _) = authorize_receive(&state, &headers).await?;
+    let (mut tx, scope) = warehouse_scope(&state, &headers).await?;
     let technician = parse_id(&id)?;
     require_technician(&mut tx, technician).await?;
+    require_local_technician(&mut tx, technician, scope.location).await?;
     let items = custody(&mut tx, technician).await?;
     tx.commit().await?;
     Ok(Json(json!({"items": items})))
@@ -492,8 +498,8 @@ pub async fn warehouse_batches(
     headers: HeaderMap,
     query: Result<Query<ListQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, _) = authorize_receive(&state, &headers).await?;
-    let page = list_batches(&mut tx, None, checked_query(query)?).await?;
+    let (mut tx, scope) = warehouse_scope(&state, &headers).await?;
+    let page = list_batches(&mut tx, None, Some(scope.location), checked_query(query)?).await?;
     tx.commit().await?;
     Ok(Json(page))
 }
@@ -503,8 +509,10 @@ pub async fn warehouse_batch(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, _) = authorize_receive(&state, &headers).await?;
-    let detail = detail_json(&mut tx, parse_id(&id)?).await?;
+    let (mut tx, scope) = warehouse_scope(&state, &headers).await?;
+    let id = parse_id(&id)?;
+    batch_in_scope(&mut tx, id, scope.location).await?;
+    let detail = detail_json(&mut tx, id).await?;
     tx.commit().await?;
     Ok(Json(detail))
 }
@@ -521,7 +529,7 @@ pub async fn receive(
     Path(id): Path<String>,
     Body(input): Body<ReceiveInput>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, actor) = authorize_receive(&state, &headers).await?;
+    let (mut tx, Scope { actor, location }) = warehouse_scope(&state, &headers).await?;
     let id = parse_id(&id)?;
     let (technician, status, session): (Uuid, String, Option<Uuid>) = sqlx::query_as(
         "SELECT technician_id, status, receipt_session_id FROM delivery_batches WHERE id = $1 FOR UPDATE",
@@ -530,6 +538,7 @@ pub async fn receive(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(ApiError::missing)?;
+    batch_in_scope(&mut tx, id, location).await?;
     let session = match (status.as_str(), session) {
         ("SUBMITTED", _) => {
             let session = receipts::open_batch_session(
@@ -538,6 +547,7 @@ pub async fn receive(
                 technician,
                 id,
                 input.client_session_id,
+                location,
             )
             .await?;
             sqlx::query(
@@ -586,4 +596,24 @@ pub async fn receive(
     let batch = summary(&mut tx, id).await?;
     tx.commit().await?;
     Ok(Json(json!({"batch": batch, "receipt_session_id": session})))
+}
+
+/// Lotes de técnicos de outra cidade não aparecem para este estoque.
+async fn batch_in_scope(
+    db: &mut PgConnection,
+    batch: Uuid,
+    location: Uuid,
+) -> Result<(), ApiError> {
+    let local: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM delivery_batches b JOIN users u ON u.id = b.technician_id
+         WHERE b.id = $1 AND u.location_id = $2)",
+    )
+    .bind(batch)
+    .bind(location)
+    .fetch_one(db)
+    .await?;
+    if !local {
+        return Err(ApiError::missing());
+    }
+    Ok(())
 }

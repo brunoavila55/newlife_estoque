@@ -34,6 +34,14 @@ async function expectPending(page: Page, count: number) {
   await expect(page.getByText(count === 0 ? 'Tudo enviado' : `${count} foto${count > 1 ? 's' : ''} para enviar`, { exact: true })).toBeVisible()
 }
 
+const city = { id: '00000000-0000-4000-8000-000000000001', name: 'São Gabriel' }
+const cityMock: Record<string, unknown> = {
+  '/api/v1/locations': { items: [city] },
+  '/api/v1/warehouse/overview': { items: [{ ...city, technicians: 1, clerks: 1, equipment_in_stock: 0,
+    equipment_with_technicians: 0, open_batches: 0, sims_in_stock: 0, sims_with_technicians: 0 }] },
+  '/api/v1/me/sims': { items: [] },
+}
+
 test('técnico consulta o que está com ele e monta um lote de entrega', async ({ page, context }) => {
   let received = false
   let created: Record<string, unknown> | undefined
@@ -50,6 +58,7 @@ test('técnico consulta o que está com ele e monta um lote de entrega', async (
     if (path.endsWith('/auth/web/login')) {
       return route.fulfill({ json: { access_token: 'tech-token', expires_in: 3600, user: technician } })
     }
+    if (cityMock[path]) return route.fulfill({ json: cityMock[path] })
     if (path === '/api/v1/me/custody') {
       expect(request.headers().authorization).toBe('Bearer tech-token')
       return route.fulfill({ json: { items: received ? [] : [item('c1', '0001-O'), item('c2', null)] } })
@@ -406,6 +415,7 @@ test('revisa o OCR com foto e confirma a correção feita pelo administrador', a
       return route.fulfill({ json: { access_token: 'mock-token', expires_in: 3600,
         user: { ...technician, role: 'administrator', name: 'Administradora', login: 'admin' } } })
     }
+    if (cityMock[path]) return route.fulfill({ json: cityMock[path] })
     if (path === '/api/v1/admin/captures') {
       return route.fulfill({ json: { items: validated ? [] : [capture], next_cursor: null } })
     }

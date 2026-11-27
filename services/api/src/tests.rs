@@ -22,6 +22,8 @@ use crate::{
 };
 
 const PASSWORD: &str = "senha-de-teste-local";
+const SAO_GABRIEL: &str = "00000000-0000-4000-8000-000000000001";
+const BAGE: &str = "00000000-0000-4000-8000-000000000002";
 
 #[derive(Default)]
 struct FakeStorage(Mutex<HashMap<String, Bytes>>);
@@ -95,8 +97,8 @@ async fn fixture(db: &PgPool) -> (Router, tokio::sync::SemaphorePermit<'static>)
     let permit = INTEGRATION_TESTS.acquire().await.unwrap();
     let password_hash = hash_password(PASSWORD.into()).await.unwrap();
     for login in ["admin", "reviewer"] {
-        sqlx::query("INSERT INTO users (id, name, login, password_hash, role) VALUES ($1, $2, $2, $3, 'administrator')")
-            .bind(Uuid::new_v4()).bind(login).bind(&password_hash).execute(db).await.unwrap();
+        sqlx::query("INSERT INTO users (id, name, login, password_hash, role, location_id) VALUES ($1, $2, $2, $3, 'administrator', $4::uuid)")
+            .bind(Uuid::new_v4()).bind(login).bind(&password_hash).bind(SAO_GABRIEL).execute(db).await.unwrap();
     }
     let app = router(AppState {
         db: db.clone(),
@@ -169,12 +171,22 @@ async fn create_technician(app: &Router, admin: &Value, name: &str) -> Uuid {
 }
 
 async fn create_account(app: &Router, admin: &Value, name: &str, role: &str) -> Uuid {
+    create_account_in(app, admin, name, role, SAO_GABRIEL).await
+}
+
+async fn create_account_in(
+    app: &Router,
+    admin: &Value,
+    name: &str,
+    role: &str,
+    location: &str,
+) -> Uuid {
     let (status, result) = call(
         app,
         "POST",
         "/api/v1/admin/users",
         Some(access(admin)),
-        json!({"login": name, "name": name, "password": PASSWORD, "role": role}),
+        json!({"login": name, "name": name, "password": PASSWORD, "role": role, "location_id": location}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{result}");
@@ -582,7 +594,7 @@ async fn review_preserves_custody_under_concurrent_validation(db: PgPool) {
 
     // A legacy import can contain the same label on two pieces of equipment.
     let legacy = Uuid::new_v4();
-    sqlx::query("INSERT INTO equipment (id, warehouse_id) SELECT $1, id FROM locations")
+    sqlx::query("INSERT INTO equipment (id, warehouse_id) SELECT $1, id FROM locations WHERE name = 'São Gabriel'")
         .bind(legacy)
         .execute(&db)
         .await
@@ -1410,7 +1422,7 @@ async fn receipt_scopes_scans_and_transfers_custody_once_under_concurrency(db: P
     assert_eq!(delivered.0, StatusCode::OK, "{}", delivered.1);
     let items = delivered.1["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["warehouse_name"], "Depósito piloto");
+    assert_eq!(items[0]["warehouse_name"], "São Gabriel");
     assert!(items[0]["delivered_at"].is_string());
     assert!(items[0]["identifiers"].as_array().unwrap().iter().any(|identifier|
         identifier["kind"] == "SERIAL" && identifier["raw_value"] == "0001-O"));
@@ -2151,7 +2163,7 @@ async fn admin_edits_profile_role_and_reactivates_accounts(db: PgPool) {
         "/api/v1/admin/users",
         Some(access(&admin)),
         json!({"login": "zap", "name": "Zap", "password": PASSWORD, "role": "technician",
-            "whatsapp": "(11) 98765-4321"}),
+            "whatsapp": "(11) 98765-4321", "location_id": SAO_GABRIEL}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
@@ -2459,4 +2471,597 @@ async fn admin_deletes_accounts_preserving_history(db: PgPool) {
 
     // Administrador pode criar outro administrador.
     create_account(&app, &admin, "gestor", "administrator").await;
+}
+
+async fn call_in(
+    app: &Router,
+    method: &str,
+    path: &str,
+    token: &str,
+    location: &str,
+    value: Value,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-location-id", location);
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(value.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 256 * 1024).await.unwrap();
+    (
+        status,
+        if body.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&body).unwrap()
+        },
+    )
+}
+
+/// ICCID válido (Luhn) a partir de um número de série de 10 dígitos.
+fn iccid(serial: u64) -> String {
+    let body = format!("895540000{serial:010}");
+    let sum: u32 = body
+        .bytes()
+        .rev()
+        .enumerate()
+        .map(|(index, byte)| {
+            let value = u32::from(byte - b'0');
+            if index % 2 == 0 {
+                let doubled = value * 2;
+                if doubled > 9 { doubled - 9 } else { doubled }
+            } else {
+                value
+            }
+        })
+        .sum();
+    format!("{body}{}", (10 - sum % 10) % 10)
+}
+
+fn sheet(serials: std::ops::Range<u64>) -> Vec<Value> {
+    serials
+        .enumerate()
+        .map(|(index, serial)| {
+            json!({"row": index + 2, "iccid": iccid(serial), "operator_status": "Livre",
+                "subscriber": " - ", "carrier": "VIVO", "mvno_display": "NEW LIFE"})
+        })
+        .collect()
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn cities_scope_technicians_batches_and_receipts(db: PgPool) {
+    let (app, _permit) = fixture(&db).await;
+    let admin = login(&app, "admin").await;
+    let gabriel_tech = create_account(&app, &admin, "tec-sg", "technician").await;
+    let bage_tech = create_account_in(&app, &admin, "tec-bage", "technician", BAGE).await;
+    create_account_in(&app, &admin, "estoque-bage", "warehouse_clerk", BAGE).await;
+    let clerk = login(&app, "estoque-bage").await;
+
+    // Técnico e estoquista precisam de cidade; administrador não.
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/api/v1/admin/users",
+        Some(access(&admin)),
+        json!({"login": "semcidade", "name": "Sem", "password": PASSWORD, "role": "technician"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/api/v1/admin/users",
+        Some(access(&admin)),
+        json!({"login": "outroadm", "name": "Adm", "password": PASSWORD, "role": "administrator"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(body["location_id"].is_null());
+
+    let (status, cities) = call(
+        &app,
+        "GET",
+        "/api/v1/locations",
+        Some(access(&clerk)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<_> = cities["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Bagé", "Passo Fundo", "São Gabriel"]);
+
+    // O estoquista só vê técnicos da própria cidade, mesmo pedindo outra.
+    let (status, list) = call_in(
+        &app,
+        "GET",
+        "/api/v1/warehouse/technicians-summary",
+        access(&clerk),
+        SAO_GABRIEL,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<_> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].clone())
+        .collect();
+    assert_eq!(ids, [json!(bage_tech)]);
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/v1/receipt-sessions",
+        Some(access(&clerk)),
+        json!({"client_session_id": Uuid::new_v4(), "technician_id": gabriel_tech}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/v1/receipt-sessions",
+        Some(access(&clerk)),
+        json!({"client_session_id": Uuid::new_v4(), "technician_id": bage_tech}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Lote de São Gabriel não aparece nem abre em Bagé.
+    let capture_id = capture(&db, gabriel_tech, "sg").await;
+    let tech = login(&app, "tec-sg").await;
+    let (status, batch) = call(
+        &app,
+        "POST",
+        "/api/v1/me/batches",
+        Some(access(&tech)),
+        json!({"client_batch_id": Uuid::new_v4(), "capture_ids": [capture_id]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{batch}");
+    let batch_id = batch["batch"]["id"].as_str().unwrap().to_owned();
+    let (_, queue) = call(
+        &app,
+        "GET",
+        "/api/v1/warehouse/batches?status=open",
+        Some(access(&clerk)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(queue["items"].as_array().unwrap().len(), 0);
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/warehouse/batches/{batch_id}/receive"),
+        Some(access(&clerk)),
+        json!({"client_session_id": Uuid::new_v4()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // O administrador escolhe a cidade pelo cabeçalho.
+    let (_, queue) = call_in(
+        &app,
+        "GET",
+        "/api/v1/warehouse/batches?status=open",
+        access(&admin),
+        SAO_GABRIEL,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(queue["items"].as_array().unwrap().len(), 1);
+    let (_, queue) = call_in(
+        &app,
+        "GET",
+        "/api/v1/warehouse/batches?status=open",
+        access(&admin),
+        BAGE,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(queue["items"].as_array().unwrap().len(), 0);
+
+    // Com lote em aberto, o técnico não muda de cidade.
+    let (status, body) = call(
+        &app,
+        "PATCH",
+        &format!("/api/v1/admin/users/{gabriel_tech}"),
+        Some(access(&admin)),
+        json!({"location_id": BAGE}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "LOCATION_CHANGE_BLOCKED");
+
+    let (status, overview) = call(
+        &app,
+        "GET",
+        "/api/v1/warehouse/overview",
+        Some(access(&clerk)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(overview["items"].as_array().unwrap().len(), 1);
+    assert_eq!(overview["items"][0]["technicians"], 1);
+    let (_, overview) = call(
+        &app,
+        "GET",
+        "/api/v1/warehouse/overview",
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(overview["items"].as_array().unwrap().len(), 3);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn sim_import_previews_reports_and_updates_operator_data(db: PgPool) {
+    let (app, _permit) = fixture(&db).await;
+    let admin = login(&app, "admin").await;
+    let mut rows = sheet(0..20);
+    rows.push(json!({"row": 30, "iccid": "89554000000414256298"}));
+    rows.push(json!({"row": 31, "iccid": iccid(3)}));
+    rows.push(json!({"row": 32, "iccid": "8,95540000004142E+19"}));
+    let key = Uuid::new_v4();
+    let body = |dry_run: bool, key: Uuid, rows: &Vec<Value>| {
+        json!({
+        "client_import_id": key, "file_name": "Planilha ICCID.xlsx", "dry_run": dry_run, "rows": rows})
+    };
+
+    let (status, preview) = call_in(
+        &app,
+        "POST",
+        "/api/v1/sims/imports",
+        access(&admin),
+        SAO_GABRIEL,
+        body(true, key, &rows),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["created"], 20);
+    assert_eq!(preview["invalid"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sim_cards")
+            .fetch_one(&db)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let (status, done) = call_in(
+        &app,
+        "POST",
+        "/api/v1/sims/imports",
+        access(&admin),
+        SAO_GABRIEL,
+        body(false, key, &rows),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["created"], 20);
+    // Repetir a mesma importação não duplica nada.
+    let (status, again) = call_in(
+        &app,
+        "POST",
+        "/api/v1/sims/imports",
+        access(&admin),
+        SAO_GABRIEL,
+        body(false, key, &rows),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again, done);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sim_movements")
+            .fetch_one(&db)
+            .await
+            .unwrap(),
+        20
+    );
+
+    // Nova planilha: um chip ativado, um novo (em Bagé) e os demais iguais.
+    let mut next = sheet(0..21);
+    next[4]["operator_status"] = json!("Ativo");
+    next[4]["subscriber"] = json!("Cliente 01");
+    let (status, second) = call_in(
+        &app,
+        "POST",
+        "/api/v1/sims/imports",
+        access(&admin),
+        BAGE,
+        body(false, Uuid::new_v4(), &next),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(
+        (
+            second["created"].as_i64(),
+            second["updated"].as_i64(),
+            second["unchanged"].as_i64()
+        ),
+        (Some(1), Some(1), Some(19))
+    );
+    assert_eq!(second["other_location_count"], 20);
+    assert_eq!(second["status_changes"][0]["to"], "Ativo");
+    let (_, found) = call_in(
+        &app,
+        "GET",
+        &format!("/api/v1/sims/lookup?code={}", &iccid(4)[..19]),
+        access(&admin),
+        SAO_GABRIEL,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(found["result"], "FOUND", "{found}");
+    assert_eq!(found["card"]["operator_status"], "Ativo");
+    assert_eq!(found["card"]["location_name"], "São Gabriel");
+    let (_, found) = call_in(
+        &app,
+        "GET",
+        &format!("/api/v1/sims/lookup?code={}", iccid(20)),
+        access(&admin),
+        SAO_GABRIEL,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(found["card"]["location_name"], "Bagé");
+    let (_, invalid) = call_in(
+        &app,
+        "GET",
+        "/api/v1/sims/lookup?code=7891234567895",
+        access(&admin),
+        SAO_GABRIEL,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(invalid["result"], "INVALID");
+
+    // Técnico não importa planilha.
+    let tech_id = create_technician(&app, &admin, "tecnico").await;
+    let _ = tech_id;
+    let tech = login(&app, "tecnico").await;
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/v1/sims/imports",
+        Some(access(&tech)),
+        body(false, Uuid::new_v4(), &next),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn sim_delivery_and_return_move_each_chip_exactly_once(db: PgPool) {
+    let (app, _permit) = fixture(&db).await;
+    let admin = login(&app, "admin").await;
+    let bruno = create_technician(&app, &admin, "bruno").await;
+    let colleague = create_technician(&app, &admin, "colega").await;
+    let bage_tech = create_account_in(&app, &admin, "tec-bage", "technician", BAGE).await;
+    create_account(&app, &admin, "estoque-sg", "warehouse_clerk").await;
+    create_account_in(&app, &admin, "estoque-bage", "warehouse_clerk", BAGE).await;
+    let clerk = login(&app, "estoque-sg").await;
+    let bage_clerk = login(&app, "estoque-bage").await;
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/v1/sims/imports",
+        Some(access(&clerk)),
+        json!({
+        "client_import_id": Uuid::new_v4(), "file_name": "chips.xlsx", "rows": sheet(0..40)}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Entrega 15 chips ao Bruno, um deles bipado sem o dígito verificador.
+    let mut fifteen: Vec<String> = (0..15).map(iccid).collect();
+    fifteen[14].truncate(19);
+    let key = Uuid::new_v4();
+    let delivery = json!({"client_transfer_id": key, "kind": "DELIVERY", "technician_id": bruno, "iccids": fifteen});
+    let (status, voucher) = call(
+        &app,
+        "POST",
+        "/api/v1/sims/transfers",
+        Some(access(&clerk)),
+        delivery.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{voucher}");
+    assert_eq!(voucher["transfer"]["total"], 15);
+    assert_eq!(voucher["transfer"]["technician_name"], "bruno");
+    assert_eq!(voucher["items"].as_array().unwrap().len(), 15);
+    assert_eq!(voucher["items"][14]["iccid"], iccid(14));
+    // Repetição idempotente: mesmo comprovante, nenhum movimento a mais.
+    let (status, repeated) = call(
+        &app,
+        "POST",
+        "/api/v1/sims/transfers",
+        Some(access(&clerk)),
+        delivery,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{repeated}");
+    assert_eq!(repeated, voucher);
+    let moved = || {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM sim_movements WHERE movement_type <> 'IMPORTED'",
+        )
+        .fetch_one(&db)
+    };
+    assert_eq!(moved().await.unwrap(), 15);
+    // A mesma chave com outra lista é recusada.
+    let (status, _) = call(&app, "POST", "/api/v1/sims/transfers", Some(access(&clerk)),
+        json!({"client_transfer_id": key, "kind": "DELIVERY", "technician_id": bruno, "iccids": [iccid(20)]})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Tudo ou nada: um chip já entregue bloqueia a entrega inteira.
+    let (status, rejected) = call(
+        &app,
+        "POST",
+        "/api/v1/sims/transfers",
+        Some(access(&clerk)),
+        json!({
+        "client_transfer_id": Uuid::new_v4(), "kind": "DELIVERY", "technician_id": colleague,
+        "iccids": [iccid(20), iccid(0), "89554000000414256298", iccid(20), iccid(99)]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
+    assert_eq!(rejected["code"], "SIM_TRANSFER_REJECTED");
+    assert_eq!(
+        rejected["problems"].as_array().unwrap().len(),
+        4,
+        "{rejected}"
+    );
+    let reason_of = |code: &str| {
+        rejected["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|problem| problem["iccid"] == code)
+            .map(|problem| problem["reason"].clone())
+    };
+    assert_eq!(reason_of(&iccid(0)).unwrap(), "Este chip está com bruno.");
+    assert_eq!(reason_of(&iccid(20)).unwrap(), "Chip repetido na lista.");
+    assert!(
+        reason_of(&iccid(99))
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .starts_with("Chip não cadastrado")
+    );
+    assert_eq!(moved().await.unwrap(), 15);
+
+    // Outra cidade não entrega chips de São Gabriel nem a técnicos de São Gabriel.
+    let (status, body) = call(&app, "POST", "/api/v1/sims/transfers", Some(access(&bage_clerk)), json!({
+        "client_transfer_id": Uuid::new_v4(), "kind": "DELIVERY", "technician_id": bage_tech, "iccids": [iccid(20)]})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        body["problems"][0]["reason"],
+        "Este chip está no estoque de São Gabriel."
+    );
+    let (status, _) = call(&app, "POST", "/api/v1/sims/transfers", Some(access(&bage_clerk)), json!({
+        "client_transfer_id": Uuid::new_v4(), "kind": "DELIVERY", "technician_id": bruno, "iccids": [iccid(20)]})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // O técnico vê os próprios chips; a conta não sai com chips em posse.
+    let tech = login(&app, "bruno").await;
+    let (_, mine) = call(
+        &app,
+        "GET",
+        "/api/v1/me/sims",
+        Some(access(&tech)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(mine["items"].as_array().unwrap().len(), 15);
+    let (status, body) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/admin/users/{bruno}"),
+        Some(access(&admin)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    // Devolução de 5 chips: só o que está com o técnico volta ao estoque.
+    let back: Vec<String> = (0..5).map(iccid).collect();
+    let (status, returned) = call(&app, "POST", "/api/v1/sims/transfers", Some(access(&clerk)), json!({
+        "client_transfer_id": Uuid::new_v4(), "kind": "RETURN", "technician_id": bruno, "iccids": back})).await;
+    assert_eq!(status, StatusCode::CREATED, "{returned}");
+    let (_, list) = call(
+        &app,
+        "GET",
+        "/api/v1/sims?holder=technicians",
+        Some(access(&clerk)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(list["totals"]["stock"], 30);
+    assert_eq!(list["totals"]["with_technicians"], 10);
+    let (_, history) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/sims/lookup?code={}", iccid(0)),
+        Some(access(&clerk)),
+        Value::Null,
+    )
+    .await;
+    let types: Vec<_> = history["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(types, ["RETURNED", "DELIVERED", "IMPORTED"]);
+    let (_, transfers) = call(
+        &app,
+        "GET",
+        "/api/v1/sims/transfers",
+        Some(access(&clerk)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(transfers["items"].as_array().unwrap().len(), 2);
+    let (status, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/sims/transfers/{key}"),
+        Some(access(&bage_clerk)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Duas entregas concorrentes do mesmo chip: apenas uma move.
+    let race = |technician: Uuid| {
+        let app = app.clone();
+        let token = access(&clerk).to_owned();
+        async move {
+            call(&app, "POST", "/api/v1/sims/transfers", Some(&token), json!({
+                "client_transfer_id": Uuid::new_v4(), "kind": "DELIVERY", "technician_id": technician,
+                "iccids": [iccid(30), iccid(31)]})).await.0
+        }
+    };
+    let (left, right) = tokio::join!(race(bruno), race(colleague));
+    let mut statuses = [left, right];
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::CREATED, StatusCode::CONFLICT]);
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sim_movements WHERE movement_type = 'DELIVERED' AND sim_card_id IN (SELECT id FROM sim_cards WHERE iccid = $1)")
+        .bind(iccid(30)).fetch_one(&db).await.unwrap(), 1);
+
+    // O banco recusa custódia sem movimento e alteração do histórico.
+    assert!(
+        sqlx::query("UPDATE sim_cards SET location_id = NULL, technician_id = $1 WHERE iccid = $2")
+            .bind(colleague)
+            .bind(iccid(35))
+            .execute(&db)
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("DELETE FROM sim_movements")
+            .execute(&db)
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("UPDATE sim_cards SET iccid = $1 WHERE iccid = $2")
+            .bind(iccid(98))
+            .bind(iccid(36))
+            .execute(&db)
+            .await
+            .is_err()
+    );
 }

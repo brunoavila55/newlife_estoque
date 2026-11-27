@@ -1,6 +1,24 @@
-# New Life · Controle de recolhimento e devolução
+# New Life · Gerenciador de estoque
 
-O sistema inclui a API Rust de custódia, o PWA do técnico para fotografar etiquetas offline, a revisão administrativa de OCR e o recebimento físico no depósito piloto. Consulte o [contrato OpenAPI](docs/api/openapi.yaml) para os endpoints e a [arquitetura](docs/architecture.md) para as regras implementadas.
+Gerenciador de estoque da New Life, publicado em `estoque.newlifefibra.com.br`. Tem dois módulos:
+
+- **Roteadores:** recolhimento em campo pelo PWA do técnico (fotos offline e OCR), revisão administrativa e conferência física no balcão.
+- **Chips (MVNO):** importação da planilha da operadora, entrega de chips aos técnicos por bipe do ICCID, devolução e comprovante pelo WhatsApp.
+
+O estoque é separado por cidade: **São Gabriel**, **Bagé** e **Passo Fundo**. Consulte o [contrato OpenAPI](docs/api/openapi.yaml) para os endpoints e a [arquitetura](docs/architecture.md) para as regras implementadas.
+
+## Cidades
+
+Cada técnico e cada estoquista pertencem a uma cidade, definida em **Usuários**. O estoquista vê e movimenta apenas o estoque da própria cidade: lotes, técnicos, comprovantes e chips. O administrador escolhe no topo da tela em qual cidade está operando, e a **Visão geral** mostra os números das três cidades lado a lado. O antigo depósito piloto passou a ser São Gabriel, e as contas que já existiam foram colocadas em São Gabriel. Para mudar alguém de cidade, abra **Gerenciar** na lista de usuários. A troca encerra as sessões da pessoa e fica bloqueada enquanto o técnico tiver roteadores, chips, fotos sem identificação ou lotes em aberto.
+
+## Chips (MVNO)
+
+1. **Importar.** Em **Estoque de chips › Importar planilha**, escolha o `.xlsx` exportado do portal da MVNO. O sistema lê a coluna **Número** (ICCID) e, quando existem, **Status**, **Assinante**, **Rede** e **Display MVNO**. Antes de gravar, mostra quantos chips são novos, quantos têm dados atualizados e quais linhas foram recusadas (ICCID inválido, dígito verificador errado ou repetido na planilha). Chips novos entram no estoque da cidade em operação. Reimportar a planilha só atualiza status e assinante; quem está com o chip não muda.
+2. **Entregar.** Em **Entregar chips**, escolha o técnico e bipe os chips. Cada leitura é conferida na hora: chip de outra cidade, já entregue ou não cadastrado toca o alerta e não entra na lista. Confira a lista e confirme com o botão ou **Ctrl+Enter**, por exemplo **Entregar: 15 chips para Bruno**. A entrega é tudo ou nada: se um chip mudou de situação, nada é registrado e o item aparece marcado.
+3. **Comprovante.** Depois de confirmar, envie pelo WhatsApp Web a lista de ICCIDs para o número cadastrado do técnico, ou copie o texto. O histórico fica em **Entregas de chips**.
+4. **Devolver.** Na mesma tela, a aba **Devolução ao estoque** recebe de volta os chips que estão com o técnico.
+
+O técnico vê os chips sob sua responsabilidade na aba **Comigo** do aplicativo. A busca no topo aceita ICCID e mostra com quem o chip está e o histórico. O leitor pode enviar o ICCID com 19 ou 20 dígitos.
 
 ## Ambiente local
 

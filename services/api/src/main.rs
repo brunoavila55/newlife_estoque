@@ -13,10 +13,12 @@ mod batches;
 mod captures;
 mod custody;
 mod error;
+mod locations;
 mod operations;
 mod receipts;
 mod recognition;
 mod review_queue;
+mod sims;
 mod storage;
 mod worker;
 
@@ -138,6 +140,29 @@ fn router(state: AppState) -> Router {
             "/api/v1/admin/users/{id}/reset-password",
             post(auth::reset_password),
         )
+        .route("/api/v1/locations", get(locations::list))
+        .route("/api/v1/warehouse/overview", get(locations::overview))
+        .route(
+            "/api/v1/sims/imports",
+            get(sims::imports)
+                .post(sims::import)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    sims::IMPORT_BODY_LIMIT,
+                )),
+        )
+        .route("/api/v1/sims", get(sims::list))
+        .route("/api/v1/sims/lookup", get(sims::lookup))
+        .route("/api/v1/sims/technicians", get(sims::technicians))
+        .route(
+            "/api/v1/sims/transfers",
+            get(sims::transfers)
+                .post(sims::transfer)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    sims::TRANSFER_BODY_LIMIT,
+                )),
+        )
+        .route("/api/v1/sims/transfers/{id}", get(sims::transfer_by_id))
+        .route("/api/v1/me/sims", get(sims::mine))
         .route("/api/v1/me/inventory", get(custody::inventory))
         .route("/api/v1/me/custody", get(batches::my_custody))
         .route(

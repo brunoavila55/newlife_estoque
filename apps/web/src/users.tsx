@@ -4,7 +4,17 @@ import type { User } from './db'
 import { InventoryPanel } from './inventory'
 import { ReviewDesk } from './review'
 
-type ManagedUser = User & { active: boolean; whatsapp: string | null }
+type ManagedUser = User & { active: boolean; whatsapp: string | null; location_id: string | null }
+type City = { id: string; name: string }
+
+/** Cidades cadastradas, para escolher onde cada técnico e estoquista atua. */
+function useCities(owner: string): City[] {
+  const [cities, setCities] = useState<City[]>([])
+  useEffect(() => {
+    administrator<{ items: City[] }>(owner, '/locations').then((data) => setCities(data.items), () => setCities([]))
+  }, [owner])
+  return cities
+}
 
 /** Exibe 5511987654321 como +55 (11) 98765-4321. */
 export function formatWhatsapp(digits: string | null | undefined) {
@@ -53,6 +63,9 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
   const [listError, setListError] = useState('')
   const [managing, setManaging] = useState<ManagedUser>()
   const [removed, setRemoved] = useState('')
+  const [cityFilter, setCityFilter] = useState('')
+  const cities = useCities(owner)
+  const cityName = (id: string | null) => cities.find((city) => city.id === id)?.name
 
   const fail = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && failure.status === 401) denied()
@@ -82,19 +95,26 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
   return (
     <section className="work-list">
       <div className="section-head"><h2>Usuários cadastrados</h2>
-        <button className="small-btn" disabled={loading} onClick={() => void load()}>Atualizar</button>
+        <div className="actions">
+          <select aria-label="Filtrar por cidade" value={cityFilter} onChange={(event) => setCityFilter(event.target.value)}>
+            <option value="">Todas as cidades</option>
+            {cities.map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
+          </select>
+          <button className="small-btn" disabled={loading} onClick={() => void load()}>Atualizar</button>
+        </div>
       </div>
       {listError && <p className="alert" role="alert">{listError}</p>}
       {removed && <p className="success" role="status">{removed}</p>}
       {loading && !page && <p role="status" className="muted">Consultando usuários…</p>}
       <div className="card table-card">
         <table className="data-table">
-          <thead><tr><th>Nome</th><th>Login</th><th>Perfil</th><th>WhatsApp</th><th>Situação</th><th /></tr></thead>
+          <thead><tr><th>Nome</th><th>Login</th><th>Perfil</th><th>Cidade</th><th>WhatsApp</th><th>Situação</th><th /></tr></thead>
           <tbody>
-            {page?.items.map((user) => <tr key={user.id} className={user.active ? '' : 'inactive'}>
+            {page?.items.filter((user) => !cityFilter || user.location_id === cityFilter).map((user) => <tr key={user.id} className={user.active ? '' : 'inactive'}>
               <td><strong>{user.name}</strong>{user.id === owner && <span className="muted"> (você)</span>}</td>
               <td className="mono">{user.login}</td>
               <td>{roleLabels[user.role ?? 'technician']}</td>
+              <td>{cityName(user.location_id) ?? (user.role === 'administrator' ? 'Todas' : '—')}</td>
               <td className="mono">{formatWhatsapp(user.whatsapp) || '—'}</td>
               <td><span className={'badge ' + (user.active ? 'badge-success' : 'badge-muted')}>{user.active ? 'Ativo' : 'Desativado'}</span></td>
               <td className="num"><div className="row-actions">
@@ -102,12 +122,12 @@ function UsersPanel({ owner, denied }: { owner: string; denied: () => void }) {
                 <button className="small-btn" onClick={() => { setRemoved(''); setManaging(user) }}>Gerenciar</button>
               </div></td>
             </tr>)}
-            {page?.items.length === 0 && <tr><td colSpan={6} className="empty-cell">Nenhum usuário cadastrado.</td></tr>}
+            {page?.items.length === 0 && <tr><td colSpan={7} className="empty-cell">Nenhum usuário cadastrado.</td></tr>}
           </tbody>
         </table>
       </div>
       {page?.next_cursor && <button disabled={loading} onClick={() => void load(page.next_cursor!)}>Carregar mais usuários</button>}
-      {managing && <UserManager key={managing.id} owner={owner} user={managing} fail={fail}
+      {managing && <UserManager key={managing.id} owner={owner} user={managing} fail={fail} cities={cities}
         close={() => setManaging(undefined)}
         deleted={(message) => {
           const id = managing.id
@@ -141,6 +161,8 @@ function TechnicianProfile({ technician, owner, denied, back }: {
 }
 
 function UserRegistration({ owner, denied }: { owner: string; denied: () => void }) {
+  const cities = useCities(owner)
+  const [role, setRole] = useState('technician')
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
   const [created, setCreated] = useState('')
@@ -161,6 +183,7 @@ function UserRegistration({ owner, denied }: { owner: string; denied: () => void
           name: fields.get('name'), login: fields.get('login'),
           role: fields.get('role'), password: fields.get('password'),
           whatsapp: fields.get('whatsapp'),
+          location_id: fields.get('location_id') || null,
         }),
       })
       form.reset()
@@ -182,7 +205,12 @@ function UserRegistration({ owner, denied }: { owner: string; denied: () => void
           <label>Nome<input name="name" required maxLength={120} /></label>
           <label>Login<input name="login" required minLength={3} maxLength={64} pattern={String.raw`[A-Za-z0-9_.\x2d]{3,64}`} autoCapitalize="none" autoComplete="off" aria-describedby="login-format" /></label>
           <small id="login-format">Use letras sem acento, números, ponto, hífen ou sublinhado.</small>
-          <label>Perfil<select name="role"><option value="technician">Técnico</option><option value="warehouse_clerk">Estoquista</option><option value="administrator">Administrador</option></select></label>
+          <label>Perfil<select name="role" value={role} onChange={(event) => setRole(event.target.value)}><option value="technician">Técnico</option><option value="warehouse_clerk">Estoquista</option><option value="administrator">Administrador</option></select></label>
+          <label>Cidade<select name="location_id" required={role !== 'administrator'} defaultValue="">
+            <option value="" disabled={role !== 'administrator'}>{role === 'administrator' ? 'Todas (sem cidade fixa)' : 'Escolha a cidade'}</option>
+            {cities.map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
+          </select></label>
+          <small>Técnicos e estoquistas só veem e movimentam o estoque da própria cidade.</small>
           <label>WhatsApp<input name="whatsapp" type="tel" inputMode="tel" autoComplete="off" maxLength={24} placeholder="(11) 98765-4321" aria-describedby="whatsapp-format" /></label>
           <small id="whatsapp-format">Com DDD. O comprovante de devolução é enviado para este número, sem papel.</small>
           <label>Senha inicial<input name="password" type="password" required minLength={6} autoComplete="new-password" aria-describedby="password-format" /></label>
@@ -203,8 +231,8 @@ function generatedPassword() {
   return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('')
 }
 
-function UserManager({ owner, user, fail, close, changed, deleted }: {
-  owner: string; user: ManagedUser; fail: (failure: unknown) => string
+function UserManager({ owner, user, fail, close, changed, deleted, cities }: {
+  owner: string; user: ManagedUser; fail: (failure: unknown) => string; cities: City[]
   close: () => void; changed: (user: ManagedUser) => void; deleted: (message: string) => void
 }) {
   const self = user.id === owner
@@ -214,6 +242,7 @@ function UserManager({ owner, user, fail, close, changed, deleted }: {
   const [name, setName] = useState(user.name)
   const [role, setRole] = useState(user.role ?? 'technician')
   const [whatsapp, setWhatsapp] = useState(formatWhatsapp(user.whatsapp))
+  const [location, setLocation] = useState(user.location_id ?? '')
   const [password, setPassword] = useState('')
   const [revealed, setRevealed] = useState(false)
   const [confirmDisable, setConfirmDisable] = useState(false)
@@ -237,19 +266,21 @@ function UserManager({ owner, user, fail, close, changed, deleted }: {
   const json = { 'Content-Type': 'application/json' }
   const roleChanged = role !== user.role
   const whatsappChanged = whatsapp.trim() !== formatWhatsapp(user.whatsapp)
+  const locationChanged = location !== '' && location !== (user.location_id ?? '')
 
   function save(event: FormEvent) {
     event.preventDefault()
     void run(async () => {
       const updated = await administrator<ManagedUser>(owner, path, {
         method: 'PATCH', headers: json,
-        body: JSON.stringify({ name, ...(roleChanged ? { role } : {}), ...(whatsappChanged ? { whatsapp } : {}) }),
+        body: JSON.stringify({ name, ...(roleChanged ? { role } : {}), ...(whatsappChanged ? { whatsapp } : {}),
+          ...(locationChanged ? { location_id: location } : {}) }),
       })
       changed(updated)
       setWhatsapp(formatWhatsapp(updated.whatsapp))
-      return roleChanged
-        ? 'Dados salvos. O perfil agora é ' + roleLabels[updated.role ?? 'technician'] + ' e as sessões abertas foram encerradas.'
-        : 'Dados salvos.'
+      if (roleChanged) return 'Dados salvos. O perfil agora é ' + roleLabels[updated.role ?? 'technician'] + ' e as sessões abertas foram encerradas.'
+      if (locationChanged) return 'Dados salvos. A cidade agora é ' + (cities.find((city) => city.id === updated.location_id)?.name ?? '') + ' e as sessões abertas foram encerradas.'
+      return 'Dados salvos.'
     })
   }
 
@@ -312,12 +343,17 @@ function UserManager({ owner, user, fail, close, changed, deleted }: {
             <option value="warehouse_clerk">Estoquista</option>
             <option value="administrator">Administrador</option>
           </select></label>
+          <label>Cidade<select value={location} onChange={(event) => setLocation(event.target.value)}>
+            {!user.location_id && <option value="">{role === 'administrator' ? 'Todas (sem cidade fixa)' : 'Escolha a cidade'}</option>}
+            {cities.map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
+          </select></label>
+          {locationChanged && <small>Trocar a cidade encerra as sessões da pessoa. Técnicos com roteadores, chips, capturas ou lotes em aberto precisam resolver as pendências antes.</small>}
           {self && <small id="manage-self-role">Você não pode trocar o próprio perfil. Peça a outro administrador.</small>}
           <label>WhatsApp<input type="tel" inputMode="tel" autoComplete="off" maxLength={24} value={whatsapp}
             onChange={(event) => setWhatsapp(event.target.value)} placeholder="(11) 98765-4321" aria-describedby="manage-whatsapp" /></label>
           <small id="manage-whatsapp">Com DDD. Recebe o comprovante de devolução. Deixe vazio para remover.</small>
           {roleChanged && <small>Trocar o perfil encerra as sessões da pessoa. Técnicos com equipamentos em posse, capturas sem identificação, lotes ou sessões de recebimento em aberto não podem mudar de perfil até a pendência ser resolvida.</small>}
-          <button className="primary" type="submit" disabled={name.trim() === user.name && !roleChanged && !whatsappChanged}>{busy ? 'Salvando…' : 'Salvar alterações'}</button>
+          <button className="primary" type="submit" disabled={name.trim() === user.name && !roleChanged && !whatsappChanged && !locationChanged}>{busy ? 'Salvando…' : 'Salvar alterações'}</button>
         </fieldset>
       </form>
 

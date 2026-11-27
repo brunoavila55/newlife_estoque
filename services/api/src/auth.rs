@@ -42,6 +42,16 @@ pub struct User {
     role: Role,
     active: bool,
     whatsapp: Option<String>,
+    location_id: Option<Uuid>,
+}
+
+impl User {
+    pub fn role(&self) -> Role {
+        self.role
+    }
+    pub fn location_id(&self) -> Option<Uuid> {
+        self.location_id
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -65,6 +75,9 @@ pub struct NewUser {
     role: Role,
     #[serde(default)]
     whatsapp: Option<String>,
+    /// Cidade do técnico ou estoquista. Opcional para administradores.
+    #[serde(default)]
+    location_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -181,9 +194,12 @@ fn bearer(headers: &HeaderMap) -> Result<Vec<u8>, ApiError> {
     token_hash(token)
 }
 
-async fn locked_user(db: &mut PgConnection, user_id: Uuid) -> Result<Option<User>, ApiError> {
+pub(crate) async fn locked_user(
+    db: &mut PgConnection,
+    user_id: Uuid,
+) -> Result<Option<User>, ApiError> {
     Ok(sqlx::query_as(
-        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 FOR UPDATE",
+        "SELECT id, name, login, role, active, whatsapp, location_id FROM users WHERE id = $1 FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(db)
@@ -226,10 +242,10 @@ async fn session_user(
     refresh: bool,
 ) -> Result<User, ApiError> {
     let sql = if refresh {
-        "SELECT u.id, name, login, role, active, whatsapp FROM sessions s JOIN users u ON u.id = s.user_id
+        "SELECT u.id, name, login, role, active, whatsapp, location_id FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE refresh_hash = $1 AND renew_until > now() AND active"
     } else {
-        "SELECT u.id, name, login, role, active, whatsapp FROM sessions s JOIN users u ON u.id = s.user_id
+        "SELECT u.id, name, login, role, active, whatsapp, location_id FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE token_hash = $1 AND expires_at > now() AND active"
     };
     sqlx::query_as(sql)
@@ -299,7 +315,7 @@ async fn login_session(state: &AppState, input: Credentials) -> Result<Session, 
         return Err(ApiError::unauthorized());
     }
     let account: Option<LoginUser> = sqlx::query_as(
-        "SELECT id, name, login, role, active, whatsapp, password_hash FROM users WHERE login = $1",
+        "SELECT id, name, login, role, active, whatsapp, location_id, password_hash FROM users WHERE login = $1",
     )
     .bind(login)
     .fetch_optional(&state.db)
@@ -473,7 +489,7 @@ pub async fn list_users(
         return Err(ApiError::invalid("Use um limite de 1 a 100 itens."));
     }
     let mut items: Vec<User> = sqlx::query_as(
-        "SELECT id, name, login, role, active, whatsapp FROM users
+        "SELECT id, name, login, role, active, whatsapp, location_id FROM users
          WHERE deleted_at IS NULL AND ($1::uuid IS NULL OR id > $1) ORDER BY id LIMIT $2",
     )
     .bind(query.after)
@@ -502,8 +518,12 @@ pub async fn create_user(
         .map(checked_whatsapp)
         .transpose()?
         .flatten();
+    let location = checked_location_need(input.role, input.location_id)?;
     let hash = hash_password(input.credentials.password).await?;
     let (mut tx, actor) = authorize(&state.db, &headers, Role::Administrator).await?;
+    if let Some(location) = location {
+        require_location(&mut tx, location).await?;
+    }
     let user = insert_user(
         &mut tx,
         name,
@@ -511,6 +531,7 @@ pub async fn create_user(
         &hash,
         input.role,
         whatsapp.as_deref(),
+        location,
     )
     .await?;
     audit(
@@ -604,6 +625,8 @@ pub struct UserChanges {
     role: Option<Role>,
     /// Texto vazio remove o número; ausente mantém o atual.
     whatsapp: Option<String>,
+    /// Cidade da conta; ausente mantém a atual.
+    location_id: Option<Uuid>,
 }
 
 /// Pendência que impede trocar o perfil ou excluir a conta.
@@ -612,11 +635,18 @@ enum Pending {
     Captures,
     Batches,
     Sessions,
+    SimCards,
 }
 
 impl Pending {
     fn message(&self, deleting: bool) -> &'static str {
         match (self, deleting) {
+            (Pending::SimCards, false) => {
+                "O técnico ainda tem chips em posse. Receba a devolução antes de trocar o perfil ou a cidade."
+            }
+            (Pending::SimCards, true) => {
+                "O técnico ainda tem chips em posse. Receba a devolução antes de excluir a conta."
+            }
             (Pending::Custody, false) => {
                 "O técnico ainda tem equipamentos em posse. Receba-os antes de trocar o perfil."
             }
@@ -656,6 +686,7 @@ async fn pending_work(db: &mut PgConnection, user: &User) -> Result<Option<Pendi
                 WHEN EXISTS (SELECT 1 FROM delivery_batches WHERE technician_id = $1
                     AND status IN ('SUBMITTED', 'RECEIVING')) THEN 'batches'
                 WHEN EXISTS (SELECT 1 FROM receipt_sessions WHERE technician_id = $1 AND closed_at IS NULL) THEN 'sessions'
+                WHEN EXISTS (SELECT 1 FROM sim_cards WHERE technician_id = $1) THEN 'sims'
              END",
         ),
         // Administradores também operam a mesa de recebimento.
@@ -672,6 +703,7 @@ async fn pending_work(db: &mut PgConnection, user: &User) -> Result<Option<Pendi
         "custody" => Pending::Custody,
         "captures" => Pending::Captures,
         "batches" => Pending::Batches,
+        "sims" => Pending::SimCards,
         _ => Pending::Sessions,
     }))
 }
@@ -679,7 +711,7 @@ async fn pending_work(db: &mut PgConnection, user: &User) -> Result<Option<Pendi
 /// Trava a conta alvo. Contas excluídas não podem mais ser alteradas.
 async fn target_user(db: &mut PgConnection, id: Uuid) -> Result<User, ApiError> {
     sqlx::query_as(
-        "SELECT id, name, login, role, active, whatsapp FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        "SELECT id, name, login, role, active, whatsapp, location_id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
     )
     .bind(id)
     .fetch_optional(db)
@@ -711,9 +743,29 @@ pub async fn update_user(
     let name = name.unwrap_or(&before.name).to_owned();
     let role = input.role.unwrap_or(before.role);
     let whatsapp = whatsapp.unwrap_or_else(|| before.whatsapp.clone());
-    if name == before.name && role == before.role && whatsapp == before.whatsapp {
+    let location = input.location_id.or(before.location_id);
+    checked_location_need(role, location)?;
+    if let Some(location) = location.filter(|value| Some(*value) != before.location_id) {
+        require_location(&mut tx, location).await?;
+    }
+    let location_changed = location != before.location_id;
+    if name == before.name
+        && role == before.role
+        && whatsapp == before.whatsapp
+        && !location_changed
+    {
         tx.commit().await?;
         return Ok(Json(before));
+    }
+    if location_changed
+        && before.role != Role::Administrator
+        && let Some(pending) = pending_work(&mut tx, &before).await?
+    {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "LOCATION_CHANGE_BLOCKED",
+            pending.message(false),
+        ));
     }
     if role != before.role && id == actor {
         return Err(self_blocked(
@@ -730,16 +782,18 @@ pub async fn update_user(
         ));
     }
     let after: User = sqlx::query_as(
-        "UPDATE users SET name = $1, role = $2, whatsapp = $4 WHERE id = $3 RETURNING id, name, login, role, active, whatsapp",
+        "UPDATE users SET name = $1, role = $2, whatsapp = $4, location_id = $5 WHERE id = $3
+         RETURNING id, name, login, role, active, whatsapp, location_id",
     )
     .bind(&name)
     .bind(role)
     .bind(id)
     .bind(&whatsapp)
+    .bind(location)
     .fetch_one(&mut *tx)
     .await?;
-    if role != before.role {
-        // Sessões emitidas para o perfil anterior não devem sobreviver à troca.
+    if role != before.role || location_changed {
+        // Sessões emitidas para o perfil ou a cidade anterior não devem sobreviver à troca.
         revoke(&mut tx, id).await?;
     }
     audit(
@@ -748,8 +802,9 @@ pub async fn update_user(
         "USER_UPDATED",
         "user",
         id,
-        Some(json!({"name": before.name, "role": before.role, "whatsapp": before.whatsapp})),
-        json!({"name": after.name, "role": after.role, "whatsapp": after.whatsapp, "sessions_revoked": role != before.role}),
+        Some(json!({"name": before.name, "role": before.role, "whatsapp": before.whatsapp, "location_id": before.location_id})),
+        json!({"name": after.name, "role": after.role, "whatsapp": after.whatsapp, "location_id": after.location_id,
+            "sessions_revoked": role != before.role || location_changed}),
     )
     .await?;
     tx.commit().await?;
@@ -859,10 +914,11 @@ async fn insert_user(
     hash: &str,
     role: Role,
     whatsapp: Option<&str>,
+    location: Option<Uuid>,
 ) -> Result<User, ApiError> {
     sqlx::query_as(
-        "INSERT INTO users (id, name, login, password_hash, role, whatsapp) VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (login) DO NOTHING RETURNING id, name, login, role, active, whatsapp",
+        "INSERT INTO users (id, name, login, password_hash, role, whatsapp, location_id) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (login) DO NOTHING RETURNING id, name, login, role, active, whatsapp, location_id",
     )
     .bind(Uuid::new_v4())
     .bind(name)
@@ -870,6 +926,7 @@ async fn insert_user(
     .bind(hash)
     .bind(role)
     .bind(whatsapp)
+    .bind(location)
     .fetch_optional(db)
     .await?
     .ok_or(ApiError(
@@ -877,6 +934,27 @@ async fn insert_user(
         "LOGIN_EXISTS",
         "Este login já está cadastrado.",
     ))
+}
+
+/// Técnicos e estoquistas precisam de uma cidade; administradores, não.
+fn checked_location_need(role: Role, location: Option<Uuid>) -> Result<Option<Uuid>, ApiError> {
+    if role != Role::Administrator && location.is_none() {
+        return Err(ApiError::invalid(
+            "Escolha a cidade do técnico ou estoquista.",
+        ));
+    }
+    Ok(location)
+}
+
+async fn require_location(db: &mut PgConnection, location: Uuid) -> Result<(), ApiError> {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM locations WHERE id = $1)")
+        .bind(location)
+        .fetch_one(db)
+        .await?;
+    if !exists {
+        return Err(ApiError::invalid("Cidade não encontrada."));
+    }
+    Ok(())
 }
 
 pub fn parse_id(value: &str) -> Result<Uuid, ApiError> {
@@ -931,6 +1009,7 @@ pub async fn bootstrap(db: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
         &checked_login(&login)?,
         &hash,
         Role::Administrator,
+        None,
         None,
     )
     .await?;

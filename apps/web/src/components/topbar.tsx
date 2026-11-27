@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Icon } from './icon'
 
-export function Topbar({ connected, onQuickSearch }: { connected: boolean; onQuickSearch?: (query: string) => void }) {
+export type CityChoice = { id: string; name: string }
+
+export function Topbar({ connected, onQuickSearch, city, cities, onCity }: {
+  connected: boolean
+  onQuickSearch?: (query: string) => void
+  city?: CityChoice
+  /** Presente apenas para quem pode trocar de cidade (administrador). */
+  cities?: CityChoice[]
+  onCity?: (id: string) => void
+}) {
   const [search, setSearch] = useState('')
   const input = useRef<HTMLInputElement>(null)
 
@@ -28,12 +37,20 @@ export function Topbar({ connected, onQuickSearch }: { connected: boolean; onQui
         <div className="topbar-search-area">
           <form onSubmit={submit} className="global-search-form">
             <Icon name="search" />
-            <input ref={input} type="search" maxLength={128} aria-label="Buscar por serial ou MAC"
-              placeholder="Buscar por serial ou MAC" value={search}
+            <input ref={input} type="search" maxLength={128} aria-label="Buscar serial, MAC ou ICCID"
+              placeholder="Buscar serial, MAC ou ICCID do chip" value={search}
               onChange={event => setSearch(event.target.value)} className="global-search-input" />
           </form>
         </div>
       )}
+      {city && <div className="city-switch">
+        <Icon name="pin" />
+        {cities && onCity
+          ? <select aria-label="Cidade em operação" value={city.id} onChange={(event) => onCity(event.target.value)}>
+            {cities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          : <strong>{city.name}</strong>}
+      </div>}
       <div className="connectivity-badge" data-online={connected}>
         <span className="pulse-dot" />
         <span>{connected ? 'Conectado' : 'Sem conexão'}</span>

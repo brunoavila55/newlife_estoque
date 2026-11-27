@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test'
 
+const city = { id: '00000000-0000-4000-8000-000000000001', name: 'São Gabriel' }
+const cityMock: Record<string, unknown> = {
+  '/api/v1/locations': { items: [city] },
+  '/api/v1/warehouse/overview': { items: [{ ...city, technicians: 1, clerks: 1, equipment_in_stock: 0,
+    equipment_with_technicians: 0, open_batches: 0, sims_in_stock: 0, sims_with_technicians: 0 }] },
+  '/api/v1/me/sims': { items: [] },
+}
+
 test('administrador abre o perfil do técnico e consulta a posse e as entregas', async ({ page, context }) => {
   const admin = { id: 'admin', name: 'Administração', login: 'admin', role: 'administrator', active: true }
   const technician = { id: 'tech', name: 'Técnica de campo', login: 'tecnica-01', role: 'technician', active: true }
@@ -8,6 +16,7 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
   await context.route('**/api/v1/**', (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
+    if (cityMock[path]) return route.fulfill({ json: cityMock[path] })
     if (path.endsWith('/auth/web/login')) {
       return route.fulfill({ json: { user: admin, access_token: 'mock-token', expires_in: 3600 } })
     }
@@ -30,7 +39,7 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
       }
       expect(request.postDataJSON()).toEqual({
         name: technician.name, login: technician.login, role: 'technician', password: 'senha-inicial-local',
-        whatsapp: '(11) 98765-4321',
+        whatsapp: '(11) 98765-4321', location_id: city.id,
       })
       created = true
       return route.fulfill({ status: 201, json: technician })
@@ -63,6 +72,8 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
   await page.getByRole('button', { name: 'Entrar', exact: true }).click()
   const menu = page.getByRole('navigation', { name: 'Módulos do estoque' })
   await expect(menu.getByRole('button', { name: 'Revisão de fotos' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Visão geral do estoque' })).toBeVisible()
+  await menu.getByRole('button', { name: 'Lotes para conferir' }).click()
   await expect(page.getByRole('heading', { name: 'Lotes para conferir' })).toBeVisible()
   await expect(page.getByText('Lote 0007')).toBeVisible()
   await expect(page.getByText(technician.name)).toBeVisible()
@@ -75,6 +86,7 @@ test('administrador abre o perfil do técnico e consulta a posse e as entregas',
   await page.getByLabel('Login', { exact: true }).fill(technician.login)
   await page.getByLabel('Senha inicial').fill('senha-inicial-local')
   await page.getByLabel('WhatsApp').fill('(11) 98765-4321')
+  await page.locator('select[name=location_id]').selectOption({ label: 'São Gabriel' })
   await page.getByRole('button', { name: 'Criar usuário', exact: true }).click()
   await expect(page.getByText('Conta criada para Técnica de campo (tecnica-01).')).toBeVisible()
   await expect(page.getByLabel('Senha inicial')).toHaveValue('')

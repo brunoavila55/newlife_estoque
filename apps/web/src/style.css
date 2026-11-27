@@ -729,3 +729,25 @@ section[aria-label="Informações do recolhimento"] dt { color: var(--text-secon
   .card { border: 0 !important; box-shadow: none !important; padding: 0 !important; }
   .voucher-table th, .voucher-table td { border-color: #999; }
 }
+
+/* Cidade em operação (topbar) */
+.city-switch { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; color: var(--gray-700); font-size: .85rem; }
+.city-switch select { font-weight: 600; padding: .3rem .5rem; }
+.city-switch + .connectivity-badge { margin-left: 1rem; }
+
+/* Visão geral por cidade */
+.city-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
+.city-card { display: grid; gap: .9rem; align-content: start; }
+.city-card.active { border-color: var(--brand-500); box-shadow: 0 0 0 1px var(--brand-500); }
+.city-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: .6rem; }
+.city-figures > div { display: grid; gap: .15rem; padding: .6rem .7rem; border-radius: var(--radius); background: var(--gray-50); }
+.city-figures strong { font-size: 1.5rem; font-variant-numeric: tabular-nums; color: var(--gray-900); }
+
+/* Botão de arquivo (importação de planilha) */
+.file-btn { display: inline-flex; align-items: center; justify-content: center; width: fit-content; cursor: pointer;
+  padding: .65rem 1.1rem; border-radius: var(--radius); background: var(--brand-600); color: #fff; font-weight: 600; }
+.file-btn:hover { background: var(--brand-700); }
+.file-btn:focus-within { box-shadow: var(--focus); }
+.sim-confirm { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; margin-top: .75rem; }
+.sim-confirm label { flex: 1 1 18rem; display: grid; gap: .3rem; }
+.sim-confirm input { width: 100%; }

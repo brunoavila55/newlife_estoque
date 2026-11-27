@@ -50,7 +50,18 @@ Copie o diretório concluído para armazenamento criptografado fora do host e co
 
 O dump é restaurado em uma transação SQL, e o bucket é preenchido depois. A verificação final é o ponto de decisão para usar o destino. Restrinja o acesso a backups autênticos, pois um dump PostgreSQL pode conter comandos executáveis. [Documentação do pg_restore](https://www.postgresql.org/docs/17/app-pgrestore.html)
 
-## Deploy em retiradas.newlifefibra.com.br
+## Deploy em estoque.newlifefibra.com.br
+
+O endereço público passou de `retiradas.newlifefibra.com.br` para `estoque.newlifefibra.com.br`. O nome do projeto Compose (`newlife-retiradas`), as imagens, a rede de entrada e os volumes continuam com o nome antigo para preservar banco e fotos. `S3_PUBLIC_ENDPOINT` precisa apontar para o domínio servido, porque as URLs assinadas das fotos usam essa origem.
+
+**Transição do domínio.** O PWA guarda as fotos ainda não enviadas no IndexedDB da origem em que foi instalado. Um aparelho instalado em `retiradas` não enxerga o armazenamento de `estoque`. Antes de redirecionar o domínio antigo:
+
+1. Configure DNS e certificado de `estoque.newlifefibra.com.br` no proxy externo, encaminhando para o mesmo Nginx do aplicativo.
+2. Mantenha `retiradas` servindo o aplicativo normalmente por alguns dias. Peça a cada técnico para abrir o aplicativo antigo com internet, tocar em **Sincronizar agora** e confirmar que não há fotos pendentes.
+3. Instale o aplicativo novo a partir de `estoque.newlifefibra.com.br` e entre de novo. A sessão não passa de um domínio para o outro.
+4. Só depois disso redirecione `retiradas` para `estoque` com 301.
+
+Enquanto os dois domínios estiverem ativos, as fotos enviadas pelo domínio antigo funcionam normalmente. Apenas os links temporários das fotos usam o domínio novo.
 
 O Compose de `infra/deploy` compila a API e o PWA e mantém PostgreSQL e SeaweedFS em uma rede Docker interna. O Nginx do aplicativo limita tentativas de login e publica somente leituras assinadas das fotos pela origem HTTPS do PWA. O proxy externo deve preservar o cabeçalho Host e definir X-Real-IP com o endereço do cliente. A rede de entrada `newlife-retiradas-edge` usa `172.30.245.0/24` e liga somente o proxy externo e o Nginx do aplicativo.
 

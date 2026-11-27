@@ -2,7 +2,7 @@ import Dexie, { type EntityTable } from 'dexie'
 import type { UserRole } from './types'
 
 export type { UserRole }
-export type User = { id: string; name: string; login: string; role?: UserRole }
+export type User = { id: string; name: string; login: string; role?: UserRole; location_id?: string | null }
 export type Profile = User & { slot: 'current'; offlineUntil: number }
 export type BarcodeEvidence = { raw_value: string; source: 'MANUAL' | 'BARCODE_DETECTOR' | 'ZXING' }
 export type QueueState = 'LOCAL_PENDING' | 'UPLOADING' | 'UPLOADED' | 'ACTION_REQUIRED'

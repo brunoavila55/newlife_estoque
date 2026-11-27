@@ -1,8 +1,10 @@
 openapi: 3.1.0
 info:
-  title: API de controle de equipamentos
-  version: 1.5.0
-  description: Contrato das Fases 1 a 5. Capturas recebidas aguardam processamento ou revisão.
+  title: API do gerenciador de estoque
+  version: 1.6.0
+  description: >
+    Gerenciador de estoque da New Life: recolhimento de roteadores, chips da MVNO e estoque
+    separado por cidade. Capturas recebidas aguardam processamento ou revisão.
 servers:
   - url: http://127.0.0.1:3000
 security:
@@ -349,6 +351,10 @@ paths:
                 whatsapp:
                   type: string
                   description: Opcional, com DDD. Aceita espaços, parênteses, hífen e +; números brasileiros de 10 ou 11 dígitos recebem o prefixo 55. Guardado só com dígitos.
+                location_id:
+                  type: [string, 'null']
+                  format: uuid
+                  description: Cidade da conta. Obrigatória para técnico e estoquista; opcional para administrador.
       responses:
         '201':
           description: Conta criada
@@ -362,7 +368,7 @@ paths:
       - $ref: '#/components/parameters/Id'
     patch:
       operationId: updateUser
-      summary: Alterar nome, perfil ou WhatsApp de uma conta
+      summary: Alterar nome, perfil, cidade ou WhatsApp de uma conta
       description: >-
         Requer papel de administrador. O administrador não pode trocar o próprio perfil (409 SELF_CHANGE_BLOCKED).
         Contas excluídas respondem 404.
@@ -383,6 +389,10 @@ paths:
                 whatsapp:
                   type: string
                   description: Opcional, com DDD. Aceita espaços, parênteses, hífen e +; números brasileiros de 10 ou 11 dígitos recebem o prefixo 55. Guardado só com dígitos. Texto vazio remove o número.
+                location_id:
+                  type: string
+                  format: uuid
+                  description: Nova cidade. Revoga as sessões; recusada com 409 LOCATION_CHANGE_BLOCKED enquanto houver pendências (roteadores, chips, capturas, lotes ou sessões).
       responses:
         '200':
           description: Conta após a alteração
@@ -1263,12 +1273,199 @@ paths:
                   url: { type: string, format: uri }
                   expires_in: { type: integer }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/locations:
+    get:
+      operationId: listLocations
+      summary: Cidades com estoque próprio (São Gabriel, Bagé e Passo Fundo)
+      responses:
+        '200':
+          description: Cidades em ordem alfabética
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/City' } }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/warehouse/overview:
+    get:
+      operationId: getWarehouseOverview
+      summary: Painel por cidade. O administrador recebe todas; o estoquista, a própria.
+      responses:
+        '200':
+          description: Contagens de roteadores, lotes e chips por cidade
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/City'
+                        - type: object
+                          required: [technicians, clerks, equipment_in_stock, equipment_with_technicians, open_batches, sims_in_stock, sims_with_technicians]
+                          properties:
+                            technicians: { type: integer }
+                            clerks: { type: integer }
+                            equipment_in_stock: { type: integer }
+                            equipment_with_technicians: { type: integer }
+                            open_batches: { type: integer }
+                            sims_in_stock: { type: integer }
+                            sims_with_technicians: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/sims/imports:
+    get:
+      operationId: listSimImports
+      summary: Últimas 20 importações de planilha na cidade
+      parameters: [{ $ref: '#/components/parameters/Location' }]
+      responses:
+        '200': { description: Importações com o resumo de cada uma }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: importSims
+      summary: Importa a planilha da operadora (linhas já lidas do .xlsx no navegador)
+      description: >
+        Com `dry_run` devolve a conferência sem gravar. Chips novos entram no estoque da cidade da
+        operação com movimento `IMPORTED`. Chips existentes só têm status, assinante, rede e display
+        atualizados; a custódia não muda. Linhas inválidas (ICCID fora do padrão, dígito verificador
+        errado, repetidas) são relatadas e não entram. Repetir com o mesmo `client_import_id`
+        devolve o resumo gravado. Até 5000 linhas.
+      parameters: [{ $ref: '#/components/parameters/Location' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [client_import_id, file_name, rows]
+              properties:
+                client_import_id: { type: string, format: uuid }
+                file_name: { type: string, maxLength: 255 }
+                dry_run: { type: boolean, default: false }
+                rows:
+                  type: array
+                  minItems: 1
+                  maxItems: 5000
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [row, iccid]
+                    properties:
+                      row: { type: integer }
+                      iccid: { type: string }
+                      operator_status: { type: [string, 'null'] }
+                      subscriber: { type: [string, 'null'] }
+                      carrier: { type: [string, 'null'] }
+                      mvno_display: { type: [string, 'null'] }
+      responses:
+        '200': { description: 'Resumo: created, updated, unchanged, invalid, other_location, status_changes' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/sims:
+    get:
+      operationId: listSims
+      summary: Chips da cidade (no estoque e com os técnicos da cidade)
+      parameters:
+        - { $ref: '#/components/parameters/Location' }
+        - { in: query, name: holder, schema: { enum: [all, stock, technicians], default: all } }
+        - { in: query, name: technician_id, schema: { type: string, format: uuid } }
+        - { in: query, name: search, description: Dígitos contidos no ICCID, schema: { type: string } }
+        - { in: query, name: after, description: Último ICCID da página anterior, schema: { type: string } }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: 'Página de chips com totals.stock e totals.with_technicians' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/sims/lookup:
+    get:
+      operationId: lookupSim
+      summary: Resolve um ICCID bipado (19 ou 20 dígitos) e devolve situação e histórico
+      parameters:
+        - { in: query, name: code, required: true, schema: { type: string, maxLength: 64 } }
+      responses:
+        '200': { description: 'result FOUND (card, history), UNKNOWN, AMBIGUOUS ou INVALID (reason)' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/sims/technicians:
+    get:
+      operationId: listSimTechnicians
+      summary: Técnicos da cidade com a quantidade de chips em posse
+      parameters: [{ $ref: '#/components/parameters/Location' }]
+      responses:
+        '200': { description: Técnicos com sims e last_delivery_at }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/sims/transfers:
+    get:
+      operationId: listSimTransfers
+      summary: Entregas e devoluções de chips registradas na cidade
+      parameters:
+        - { $ref: '#/components/parameters/Location' }
+        - { in: query, name: technician_id, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/After' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: Página de movimentações com total de chips }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: transferSims
+      summary: Entrega chips ao técnico ou recebe a devolução (tudo ou nada)
+      description: >
+        Bloqueia os chips, confere que cada um está no estoque da cidade (entrega) ou com o técnico
+        (devolução) e grava movimentação, movimentos e auditoria na mesma transação. Se algum chip
+        não puder ser movimentado, nada é gravado e a resposta 409 `SIM_TRANSFER_REJECTED` lista
+        `problems` por ICCID. A mesma `client_transfer_id` com o mesmo conteúdo devolve o registro
+        anterior (200); com conteúdo diferente, 409 `TRANSFER_KEY_CONFLICT`.
+      parameters: [{ $ref: '#/components/parameters/Location' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [client_transfer_id, kind, technician_id, iccids]
+              properties:
+                client_transfer_id: { type: string, format: uuid }
+                kind: { enum: [DELIVERY, RETURN] }
+                technician_id: { type: string, format: uuid }
+                iccids: { type: array, minItems: 1, maxItems: 500, items: { type: string } }
+                notes: { type: [string, 'null'], maxLength: 500 }
+      responses:
+        '201': { description: 'Comprovante: transfer e items (iccid, operator_status)' }
+        '200': { description: Repetição idempotente da mesma movimentação }
+        '409': { description: 'SIM_TRANSFER_REJECTED (com problems), TRANSFER_KEY_CONFLICT ou OTHER_LOCATION' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/sims/transfers/{id}:
+    get:
+      operationId: getSimTransfer
+      summary: Comprovante de uma entrega ou devolução da cidade
+      parameters: [{ $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/Location' }]
+      responses:
+        '200': { description: 'transfer e items' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/me/sims:
+    get:
+      operationId: listMySims
+      summary: Chips sob responsabilidade do técnico autenticado
+      responses:
+        '200': { description: Chips em posse }
+        default: { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     bearer: { type: http, scheme: bearer }
     operationsBearer: { type: http, scheme: bearer }
     webRefreshCookie: { type: apiKey, in: cookie, name: stock_web_refresh }
   parameters:
+    Location:
+      in: header
+      name: X-Location-Id
+      description: >
+        Cidade da operação. Usado apenas por administradores; estoquistas operam sempre na própria
+        cidade. Sem o cabeçalho, vale a cidade de referência da conta. Vale para todas as rotas do
+        estoque (lotes, sessões de recebimento, saldos por técnico e chips).
+      schema: { type: string, format: uuid }
     EquipmentId:
       in: path
       name: equipment_id
@@ -1390,6 +1587,12 @@ components:
               expires_in: { type: integer, minimum: 0, maximum: 3600 }
               user: { $ref: '#/components/schemas/User' }
   schemas:
+    City:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
     BatchSummary:
       type: object
       required: [id, number, technician_id, technician_name, status, notes, receipt_session_id, clerk_name, created_at, finished_at, total, unidentified, received]
@@ -1576,6 +1779,10 @@ components:
           type: [string, 'null']
           pattern: '^[1-9][0-9]{11,14}$'
           description: Dígitos com código do país, usado para enviar o comprovante de devolução.
+        location_id:
+          type: [string, 'null']
+          format: uuid
+          description: Cidade da conta. Nulo apenas para administradores sem cidade de referência.
     SubmittedIdentifier:
       type: object
       required: [kind, raw_value]

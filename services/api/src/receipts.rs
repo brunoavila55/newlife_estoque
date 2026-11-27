@@ -14,9 +14,8 @@ use crate::{
     auth::{Role, audit, authorize_roles, parse_id},
     custody::{normalize_mac, normalize_serial},
     error::{ApiError, Body},
+    locations::{Scope, require_local_technician, warehouse_scope},
 };
-
-const PILOT_WAREHOUSE: Uuid = Uuid::from_u128(0x00000000_0000_4000_8000_000000000001);
 
 pub(crate) async fn authorize_receive<'a>(
     state: &'a AppState,
@@ -57,11 +56,10 @@ const SESSION_FROM: &str = "receipt_sessions s JOIN users u ON s.technician_id =
 async fn session(db: &mut PgConnection, actor: Uuid, id: Uuid) -> Result<Session, ApiError> {
     sqlx::query_as(&format!(
         "SELECT {SESSION_FIELDS} FROM {SESSION_FROM}
-         WHERE s.id = $1 AND s.clerk_id = $2 AND s.warehouse_id = $3 FOR UPDATE OF s"
+         WHERE s.id = $1 AND s.clerk_id = $2 FOR UPDATE OF s"
     ))
     .bind(id)
     .bind(actor)
-    .bind(PILOT_WAREHOUSE)
     .fetch_optional(db)
     .await?
     .ok_or_else(ApiError::missing)
@@ -104,7 +102,7 @@ pub async fn technicians(
     headers: HeaderMap,
     query: Result<Query<PickerQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, _) = authorize_receive(&state, &headers).await?;
+    let (mut tx, scope) = warehouse_scope(&state, &headers).await?;
     let query = checked_query(query)?;
     let value = query.search.as_deref().unwrap_or_default().trim();
     if value.len() > 120 || value.chars().any(char::is_control) {
@@ -112,7 +110,7 @@ pub async fn technicians(
     }
     let limit = limit(query.limit)? as usize;
     let mut users: Vec<(Uuid, String, String, i64)> = sqlx::query_as(
-        "SELECT id, name, login, (SELECT count(*) FROM equipment WHERE technician_id = users.id) AS pending_count FROM users WHERE role = 'technician' AND deleted_at IS NULL
+        "SELECT id, name, login, (SELECT count(*) FROM equipment WHERE technician_id = users.id) AS pending_count FROM users WHERE role = 'technician' AND deleted_at IS NULL AND location_id = $4
             AND ($2::uuid IS NULL OR id > $2)
             AND ($1 = '' OR strpos(lower(name), lower($1)) > 0 OR strpos(login, lower($1)) > 0)
          ORDER BY id LIMIT $3",
@@ -120,6 +118,7 @@ pub async fn technicians(
     .bind(value)
     .bind(query.after)
     .bind(limit as i64 + 1)
+    .bind(scope.location)
     .fetch_all(&mut *tx)
     .await?;
     let more = users.len() > limit;
@@ -145,7 +144,7 @@ pub async fn list(
     headers: HeaderMap,
     query: Result<Query<ListQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, actor) = authorize_receive(&state, &headers).await?;
+    let (mut tx, Scope { actor, location }) = warehouse_scope(&state, &headers).await?;
     let query = checked_query(query)?;
     let limit = limit(query.limit)? as usize;
     let closed = match query.status.as_deref().unwrap_or("all") {
@@ -160,7 +159,7 @@ pub async fn list(
            AND ($4::uuid IS NULL OR (s.opened_at, s.id) <
                (SELECT opened_at, id FROM receipt_sessions WHERE id = $4 AND clerk_id = $1 AND warehouse_id = $2))
          ORDER BY s.opened_at DESC, s.id DESC LIMIT $5"
-    )).bind(actor).bind(PILOT_WAREHOUSE).bind(closed).bind(query.after)
+    )).bind(actor).bind(location).bind(closed).bind(query.after)
         .bind(limit as i64 + 1).fetch_all(&mut *tx).await?;
     let more = items.len() > limit;
     items.truncate(limit);
@@ -180,24 +179,16 @@ pub async fn open(
     headers: HeaderMap,
     Body(input): Body<OpenInput>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, actor) = authorize_receive(&state, &headers).await?;
-    let exists: bool = sqlx::query_scalar(
-        // FOR SHARE serializa com a troca de perfil da conta, que bloqueia a linha.
-        "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND role = 'technician' FOR SHARE)",
-    )
-    .bind(input.technician_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if !exists {
-        return Err(ApiError::missing());
-    }
+    let (mut tx, Scope { actor, location }) = warehouse_scope(&state, &headers).await?;
+    // FOR SHARE serializa com a troca de perfil ou de cidade da conta.
+    require_local_technician(&mut tx, input.technician_id, location).await?;
     let created = sqlx::query(
         "INSERT INTO receipt_sessions (id, technician_id, warehouse_id, clerk_id)
          VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING",
     )
     .bind(input.client_session_id)
     .bind(input.technician_id)
-    .bind(PILOT_WAREHOUSE)
+    .bind(location)
     .bind(actor)
     .execute(&mut *tx)
     .await?
@@ -235,6 +226,7 @@ pub(crate) async fn open_batch_session(
     technician: Uuid,
     batch: Uuid,
     session_id: Uuid,
+    warehouse: Uuid,
 ) -> Result<Uuid, ApiError> {
     let created = sqlx::query(
         "INSERT INTO receipt_sessions (id, technician_id, warehouse_id, clerk_id)
@@ -242,7 +234,7 @@ pub(crate) async fn open_batch_session(
     )
     .bind(session_id)
     .bind(technician)
-    .bind(PILOT_WAREHOUSE)
+    .bind(warehouse)
     .bind(actor)
     .execute(&mut *db)
     .await?
@@ -267,7 +259,7 @@ pub(crate) async fn open_batch_session(
     .await?
     .rows_affected();
     audit(db, actor, "RECEIPT_OPENED", "receipt_session", session_id, None,
-        json!({"technician_id": technician, "warehouse_id": PILOT_WAREHOUSE, "expected": expected, "batch_id": batch})).await?;
+        json!({"technician_id": technician, "warehouse_id": warehouse, "expected": expected, "batch_id": batch})).await?;
     Ok(session_id)
 }
 
@@ -377,12 +369,12 @@ pub async fn exceptions(
     headers: HeaderMap,
     query: Result<Query<ExceptionQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, actor) = authorize_receive(&state, &headers).await?;
+    let (mut tx, Scope { actor, location }) = warehouse_scope(&state, &headers).await?;
     let query = checked_query(query)?;
     let mut rows: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
         "SELECT value, result, seen_at FROM receipt_exceptions WHERE clerk_id = $1 AND warehouse_id = $2
          AND resolved_at IS NULL AND ($3::text IS NULL OR value > $3) ORDER BY value LIMIT 26"
-    ).bind(actor).bind(PILOT_WAREHOUSE).bind(query.after).fetch_all(&mut *tx).await?;
+    ).bind(actor).bind(location).bind(query.after).fetch_all(&mut *tx).await?;
     let more = rows.len() > 25;
     rows.truncate(25);
     let cursor = rows.last().filter(|_| more).map(|row| row.0.clone());
@@ -421,13 +413,13 @@ pub async fn lookup(
     headers: HeaderMap,
     Body(input): Body<LookupInput>,
 ) -> Result<Json<Value>, ApiError> {
-    let (mut tx, actor) = authorize_receive(&state, &headers).await?;
+    let (mut tx, Scope { actor, location }) = warehouse_scope(&state, &headers).await?;
     let value = validated_code(&input.value)?;
     let response = match resolve(&mut tx, value, None).await? {
         Err(result) => {
             sqlx::query("INSERT INTO receipt_exceptions (clerk_id, warehouse_id, value, result) VALUES ($1,$2,$3,$4)
                 ON CONFLICT (clerk_id, warehouse_id, value) DO UPDATE SET result = EXCLUDED.result, seen_at = now(), resolved_at = NULL")
-                .bind(actor).bind(PILOT_WAREHOUSE).bind(value).bind(result).execute(&mut *tx).await?;
+                .bind(actor).bind(location).bind(value).bind(result).execute(&mut *tx).await?;
             let pending: Vec<(Uuid, String)> = sqlx::query_as(
                 "SELECT c.id, u.name FROM captures c JOIN users u ON u.id = c.technician_id
                  JOIN LATERAL (SELECT suggestions FROM ocr_results WHERE capture_id = c.id
@@ -450,7 +442,7 @@ pub async fn lookup(
         }
         Ok(id) => {
             sqlx::query("UPDATE receipt_exceptions SET resolved_at = now() WHERE clerk_id = $1 AND warehouse_id = $2 AND value = $3 AND resolved_at IS NULL")
-                .bind(actor).bind(PILOT_WAREHOUSE).bind(value).execute(&mut *tx).await?;
+                .bind(actor).bind(location).bind(value).execute(&mut *tx).await?;
             let owner: Option<(Uuid, String)> = sqlx::query_as(
                 "SELECT u.id, u.name FROM equipment e JOIN users u ON u.id = e.technician_id WHERE e.id = $1",
             ).bind(id).fetch_optional(&mut *tx).await?;
@@ -460,7 +452,7 @@ pub async fn lookup(
                      WHERE s.clerk_id = $1 AND s.warehouse_id = $2 AND s.technician_id = $3
                        AND s.closed_at IS NULL AND i.equipment_id = $4
                      ORDER BY s.opened_at DESC, s.id DESC LIMIT 1",
-                ).bind(actor).bind(PILOT_WAREHOUSE).bind(technician).bind(id)
+                ).bind(actor).bind(location).bind(technician).bind(id)
                  .fetch_optional(&mut *tx).await?;
                 json!({"result":"MATCHED","equipment_id":id,"technician_id":technician,"technician_name":name,"session_id":session})
             } else {

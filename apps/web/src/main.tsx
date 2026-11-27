@@ -53,13 +53,13 @@ function Login({ reauthenticate, connected, done, children }: {
       <aside className="auth-brand" aria-hidden="true">
         <span className="auth-logo"><img src="/icons/new-life-logo.png" alt="" /></span>
         <div className="auth-copy">
-          <h1>Recolhimento e devolução de equipamentos</h1>
-          <p>Cada roteador recolhido em campo, rastreado do celular do técnico até o estoque.</p>
+          <h1>Gerenciador de estoque</h1>
+          <p>Roteadores recolhidos em campo e chips da MVNO, rastreados em São Gabriel, Bagé e Passo Fundo.</p>
         </div>
         <ol className="auth-steps">
-          <li><Icon name="camera" /><strong>Coleta</strong><span>O técnico fotografa a etiqueta, mesmo sem internet.</span></li>
-          <li><Icon name="box" /><strong>Lote</strong><span>Separa o que vai entregar e informa o número no balcão.</span></li>
-          <li><Icon name="scan" /><strong>Conferência</strong><span>O estoque bipa cada equipamento e emite o comprovante.</span></li>
+          <li><Icon name="camera" /><strong>Recolhimento</strong><span>O técnico fotografa a etiqueta do roteador, mesmo sem internet.</span></li>
+          <li><Icon name="scan" /><strong>Conferência</strong><span>O estoque bipa cada roteador devolvido e emite o comprovante.</span></li>
+          <li><Icon name="sim" /><strong>Chips</strong><span>O estoque bipa os chips entregues a cada técnico e envia a lista pelo WhatsApp.</span></li>
         </ol>
         <p className="auth-footnote">Portal de operações · New Life</p>
       </aside>

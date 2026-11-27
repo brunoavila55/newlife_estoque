@@ -12,9 +12,9 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       manifest: {
-        name: 'New Life · Controle de equipamentos',
+        name: 'New Life · Estoque',
         short_name: 'New Life Estoque',
-        description: 'Captura offline de etiquetas e consulta da custódia de equipamentos.',
+        description: 'Gerenciador de estoque: roteadores recolhidos, chips da MVNO e custódia por cidade.',
         lang: 'pt-BR',
         id: '/',
         start_url: '/',

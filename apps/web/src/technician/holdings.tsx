@@ -25,6 +25,7 @@ export function HoldingsTab({ owner, connected, localPending, deny, sync, syncin
   created: (batch: BatchDetail) => void
 }) {
   const [items, setItems] = useState<CustodyItem[]>()
+  const [sims, setSims] = useState<{ iccid: string; operator_status: string | null; since: string }[]>()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [composing, setComposing] = useState(false)
   const [notes, setNotes] = useState('')
@@ -41,8 +42,12 @@ export function HoldingsTab({ owner, connected, localPending, deny, sync, syncin
     setLoading(true)
     setError('')
     try {
-      const page = await authenticated<{ items: CustodyItem[] }>(owner, '/me/custody')
+      const [page, chips] = await Promise.all([
+        authenticated<{ items: CustodyItem[] }>(owner, '/me/custody'),
+        authenticated<{ items: { iccid: string; operator_status: string | null; since: string }[] }>(owner, '/me/sims'),
+      ])
       setItems(page.items)
+      setSims(chips.items)
       setSelected((previous) => new Set(page.items
         .filter((item) => !item.batch_id && previous.has(item.capture_id)).map((item) => item.capture_id)))
     } catch (failure) {
@@ -94,7 +99,7 @@ export function HoldingsTab({ owner, connected, localPending, deny, sync, syncin
     <header className="tech-view-head row">
       <div>
         <h1>Comigo</h1>
-        <p className="muted">Equipamentos sob sua responsabilidade até o estoque conferir.</p>
+        <p className="muted">Equipamentos e chips sob sua responsabilidade até o estoque conferir.</p>
       </div>
       <button type="button" className="small-btn" onClick={() => void load()} disabled={loading || !connected}>
         <Icon name="sync" /> Atualizar
@@ -140,6 +145,15 @@ export function HoldingsTab({ owner, connected, localPending, deny, sync, syncin
           </li>
         })}</ul>
       </section>
+
+      {sims && sims.length > 0 && <section className="tech-section">
+        <div className="tech-section-head"><h2>Chips comigo <span className="count">{sims.length}</span></h2></div>
+        <p className="muted small-text">Entregues pelo estoque. Para devolver, leve ao balcão: o estoquista bipa cada chip.</p>
+        <ul className="tech-list">{sims.map((chip) => <li key={chip.iccid} className="tech-row">
+          <span className="mono">{chip.iccid}</span>
+          <span className="muted small-text">{chip.operator_status ?? ''}</span>
+        </li>)}</ul>
+      </section>}
 
       {inBatch.length > 0 && <section className="tech-section">
         <div className="tech-section-head"><h2>Já em lote <span className="count">{inBatch.length}</span></h2></div>

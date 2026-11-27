@@ -1,4 +1,22 @@
-# Arquitetura das Fases 1 a 5
+# Arquitetura
+
+## Cidades e escopo do estoque
+
+`locations` guarda as cidades. A migration `202611270001` renomeou o depósito piloto para São Gabriel, criou Bagé e Passo Fundo e acrescentou `users.location_id`, obrigatório para técnico e estoquista. O módulo `locations` resolve a cidade de cada requisição do estoque: o estoquista usa sempre a própria cidade, mesmo que envie outro valor; o administrador usa o cabeçalho `X-Location-Id` ou, sem ele, a cidade de referência da conta. A resolução trava a linha do usuário, como as demais autorizações.
+
+As rotas do estoque filtram pela cidade: técnicos do seletor e do painel, fila de lotes, abertura de sessão, ocorrências e chips. Abrir sessão ou conferir lote de técnico de outra cidade responde 409 `OTHER_LOCATION` ou 404. A sessão de recebimento grava a cidade em `warehouse_id`, e o roteador recebido entra no estoque dessa cidade. A busca por serial ou MAC continua global para que a ambiguidade seja detectada no cadastro inteiro. Trocar a cidade de uma conta revoga as sessões e é recusado enquanto houver custódia ou trabalho em aberto.
+
+## Chips (SIM cards)
+
+`sim_cards` guarda o ICCID (19 ou 20 dígitos, prefixo 89, dígito verificador Luhn quando há 20), os dados informativos da operadora e a custódia atual: estoque de uma cidade **ou** técnico. `sim_movements` registra `IMPORTED`, `DELIVERED` e `RETURNED`. Um gatilho exige que cada movimento parta de onde o anterior terminou, e uma restrição diferida exige que a custódia materializada no chip seja a do último movimento. Chaves estrangeiras compostas obrigam o movimento a herdar cidade, técnico e operador da `sim_transfers` correspondente. Chips, movimentos, entregas e importações não podem ser apagados nem reescritos.
+
+A importação recebe as linhas já lidas do `.xlsx` no navegador (`apps/web/src/xlsx.ts`, sem dependências: diretório central do ZIP, `DecompressionStream('deflate-raw')` e `DOMParser`). A API revalida cada ICCID, serializa importações com bloqueio da tabela, cria os chips novos no estoque da cidade e atualiza apenas os campos informativos dos existentes. `dry_run` executa a mesma lógica e descarta a transação. A chave `client_import_id` torna a gravação idempotente.
+
+A entrega e a devolução bloqueiam os chips com `FOR UPDATE`, conferem a posição de cada um e gravam tudo na mesma transação, ou nada. Uma repetição com a mesma `client_transfer_id` é verificada depois do bloqueio e devolve o mesmo registro. Duas entregas concorrentes do mesmo chip resultam em uma confirmação e uma recusa. Um leitor que omite o dígito verificador é resolvido pelos 19 primeiros dígitos, indexados.
+
+Os campos `Assinante` da planilha podem conter nome e CPF de clientes. Eles ficam visíveis para estoquistas e administradores da cidade e entram na auditoria da importação.
+
+## Roteadores
 
 Um processo Axum usa o PostgreSQL para contas, sessões, capturas, identidades verificadas, custódia e auditoria. A porta de armazenamento de objetos encapsula a API S3. O Compose executa PostgreSQL e SeaweedFS com volumes persistentes e portas expostas em loopback.
 

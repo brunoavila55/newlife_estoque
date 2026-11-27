@@ -1,7 +1,16 @@
 import { expect, test, type Page } from '@playwright/test'
 
 const technician = { id: '00000000-0000-4000-8000-000000000042', name: 'Técnica de teste', login: 'tecnica' }
-const clerk = { ...technician, id: '00000000-0000-4000-8000-000000000043', role: 'warehouse_clerk', name: 'Estoquista', login: 'estoquista' }
+const clerk = { ...technician, id: '00000000-0000-4000-8000-000000000043', role: 'warehouse_clerk', name: 'Estoquista', login: 'estoquista',
+  location_id: '00000000-0000-4000-8000-000000000001' }
+const city = { id: '00000000-0000-4000-8000-000000000001', name: 'São Gabriel' }
+const cityMock: Record<string, unknown> = {
+  '/api/v1/locations': { items: [city] },
+  '/api/v1/warehouse/overview': { items: [{ ...city, technicians: 1, clerks: 1, equipment_in_stock: 0,
+    equipment_with_technicians: 0, open_batches: 0, sims_in_stock: 0, sims_with_technicians: 0 }] },
+  '/api/v1/me/sims': { items: [] },
+}
+
 const date = '2026-11-23T14:00:00.000Z'
 
 async function signIn(page: Page) {
@@ -9,6 +18,8 @@ async function signIn(page: Page) {
   await page.getByLabel('Login').fill(clerk.login)
   await page.getByLabel('Senha').fill('senha-de-teste-local')
   await page.getByRole('button', { name: 'Entrar', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Visão geral do estoque' })).toBeVisible()
+  await page.getByRole('navigation', { name: 'Módulos do estoque' }).getByRole('button', { name: 'Lotes para conferir' }).click()
 }
 
 test('confere um lote com o leitor: bipe, Enter confirma, inclusão, identificação pela foto e comprovante', async ({ page, context }) => {
@@ -36,6 +47,7 @@ test('confere um lote com o leitor: bipe, Enter confirma, inclusão, identifica�
     const request = route.request()
     const path = new URL(request.url()).pathname
     if (path.endsWith('/login')) return route.fulfill({ json: { access_token: 'mock-token', expires_in: 3600, user: clerk } })
+    if (cityMock[path]) return route.fulfill({ json: cityMock[path] })
     if (path === '/api/v1/warehouse/batches') return route.fulfill({ json: { items: [batch], next_cursor: null } })
     if (path === '/api/v1/warehouse/batches/b7/receive') {
       const key = request.postDataJSON().client_session_id
@@ -176,6 +188,7 @@ test('preserva a sessão diante de falta de permissão e consulta o código da b
   await context.route('**/api/v1/**', route => {
     const url = new URL(route.request().url())
     if (url.pathname.endsWith('/login')) return route.fulfill({ json: credentials })
+    if (cityMock[url.pathname]) return route.fulfill({ json: cityMock[url.pathname] })
     if (url.pathname.endsWith('/refresh')) {
       refreshes++
       return route.fulfill({ json: credentials })
@@ -195,7 +208,7 @@ test('preserva a sessão diante de falta de permissão e consulta o código da b
   })
 
   await signIn(page)
-  const search = page.getByRole('searchbox', { name: 'Buscar por serial ou MAC' })
+  const search = page.getByRole('searchbox', { name: 'Buscar serial, MAC ou ICCID' })
   await search.fill('0001-O')
   await search.press('Enter')
   await expect(page.getByRole('alert')).toHaveText('Você não tem permissão para esta operação.')
@@ -204,6 +217,8 @@ test('preserva a sessão diante de falta de permissão e consulta o código da b
   expect(refreshes).toBe(0)
 
   await page.reload()
+  await expect(page.getByRole('heading', { name: 'Visão geral do estoque' })).toBeVisible()
+  await page.getByRole('navigation', { name: 'Módulos do estoque' }).getByRole('button', { name: 'Lotes para conferir' }).click()
   await expect(page.getByRole('heading', { name: 'Lotes para conferir' })).toBeVisible()
   expect(refreshes).toBe(1)
   await expect(page.getByText('Nenhum lote aguardando.', { exact: false })).toBeVisible()

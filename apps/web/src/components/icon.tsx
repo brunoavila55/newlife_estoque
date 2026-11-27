@@ -19,6 +19,8 @@ const paths = {
   check: 'M5 12l4 4L19 6',
   next: 'M9 6l6 6-6 6',
   menu: 'M4 6h16M4 12h16M4 18h16',
+  sim: 'M7 3h7l5 5v13H7z M10 11h6v6h-6z M13 11v6m-3-3h6',
+  pin: 'M12 21s-6-5.5-6-11a6 6 0 1 1 12 0c0 5.5-6 11-6 11z M12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z',
 } as const
 
 export type IconName = keyof typeof paths

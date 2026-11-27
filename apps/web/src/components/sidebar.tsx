@@ -3,10 +3,14 @@ import { Icon, type IconName } from './icon'
 import type { User } from '../db'
 
 export type DesktopModule =
+  | 'overview'
   | 'batches'
   | 'technicians'
   | 'history'
   | 'search'
+  | 'sim-desk'
+  | 'sim-stock'
+  | 'sim-history'
   | 'review'
   | 'users'
   | 'scanner'
@@ -25,20 +29,30 @@ const roleNames: Record<string, string> = {
   administrator: 'Administrador',
 }
 
+type Item = { id: DesktopModule; label: string; icon: IconName }
+
 export function Sidebar({ currentModule, onSelectModule, user, onLogout }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const admin = user.role === 'administrator'
-  const groups: { title: string; items: { id: DesktopModule; label: string; icon: IconName }[] }[] = [
-    { title: 'Balcão', items: [
+  const groups: { title: string; items: Item[] }[] = [
+    { title: 'Estoque', items: [
+      { id: 'overview', label: 'Visão geral', icon: 'home' },
+    ] },
+    { title: 'Roteadores', items: [
       { id: 'batches', label: 'Lotes para conferir', icon: 'scan' },
       { id: 'technicians', label: 'Estoque por técnico', icon: 'users' },
       { id: 'history', label: 'Comprovantes', icon: 'file' },
       { id: 'search', label: 'Rastrear equipamento', icon: 'search' },
     ] },
+    { title: 'Chips (MVNO)', items: [
+      { id: 'sim-desk', label: 'Entregar chips', icon: 'sim' },
+      { id: 'sim-stock', label: 'Estoque de chips', icon: 'box' },
+      { id: 'sim-history', label: 'Entregas de chips', icon: 'list' },
+    ] },
     ...(admin ? [{ title: 'Administração', items: [
       { id: 'review', label: 'Revisão de fotos', icon: 'camera' },
       { id: 'users', label: 'Usuários e permissões', icon: 'building' },
-    ] as { id: DesktopModule; label: string; icon: IconName }[] }] : []),
+    ] as Item[] }] : []),
     { title: 'Suporte', items: [
       { id: 'scanner', label: 'Testar leitor', icon: 'tools' },
       { id: 'help', label: 'Ajuda', icon: 'help' },

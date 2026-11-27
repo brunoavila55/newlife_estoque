@@ -6,12 +6,18 @@ export type Equipment = { id: string; identifiers: { kind: string; raw_value: st
 export type Inventory = { items: Equipment[]; next_cursor: string | null }
 
 export class ApiError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
+  constructor(readonly status: number, readonly code: string, message: string, readonly body?: unknown) {
     super(message)
   }
 }
 
 let session: (Session & { expiresAt: number }) | undefined
+/** Cidade em que o administrador está operando. Estoquistas usam sempre a própria. */
+let activeLocation: string | undefined
+
+export function setActiveLocation(id: string | undefined): void {
+  activeLocation = id
+}
 let renewing: Promise<Session> | undefined
 const staffAccountKey = 'newlife-staff-account'
 const day = 24 * 3600 * 1000
@@ -29,7 +35,7 @@ async function request<T>(path: string, input: RequestInit): Promise<T> {
     if (!response.ok) {
       const body = await response.json().catch(() => null)
       throw new ApiError(response.status, body?.code ?? 'API_ERROR',
-        body?.message ?? 'O servidor está indisponível. Tente novamente.')
+        body?.message ?? 'O servidor está indisponível. Tente novamente.', body)
     }
     return response.status === 204 ? undefined as T : await response.json() as T
   } finally {
@@ -148,6 +154,7 @@ async function signedRequest<T>(owner: string, path: string, input: RequestInit,
   const send = (token: string) => {
     const headers = new Headers(input.headers)
     headers.set('Authorization', 'Bearer ' + token)
+    if (scope !== 'technician' && activeLocation) headers.set('X-Location-Id', activeLocation)
     return request<T>(path, { ...input, headers })
   }
   try {
